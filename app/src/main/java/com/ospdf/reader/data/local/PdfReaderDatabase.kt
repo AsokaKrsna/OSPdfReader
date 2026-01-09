@@ -5,6 +5,84 @@ import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
 /**
+ * Entity representing an ink stroke annotation in a PDF document.
+ */
+@Entity(
+    tableName = "ink_annotations",
+    indices = [Index(value = ["document_path", "page_number"])]
+)
+data class InkAnnotationEntity(
+    @PrimaryKey
+    val id: String = UUID.randomUUID().toString(),
+    
+    @ColumnInfo(name = "document_path")
+    val documentPath: String,
+    
+    @ColumnInfo(name = "page_number")
+    val pageNumber: Int,
+    
+    @ColumnInfo(name = "points_json")
+    val pointsJson: String, // JSON serialized list of points
+    
+    @ColumnInfo(name = "color")
+    val color: Long, // Color as ARGB long
+    
+    @ColumnInfo(name = "stroke_width")
+    val strokeWidth: Float,
+    
+    @ColumnInfo(name = "is_highlighter")
+    val isHighlighter: Boolean = false,
+    
+    @ColumnInfo(name = "created_at")
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * Entity representing a shape annotation in a PDF document.
+ */
+@Entity(
+    tableName = "shape_annotations",
+    indices = [Index(value = ["document_path", "page_number"])]
+)
+data class ShapeAnnotationEntity(
+    @PrimaryKey
+    val id: String = UUID.randomUUID().toString(),
+    
+    @ColumnInfo(name = "document_path")
+    val documentPath: String,
+    
+    @ColumnInfo(name = "page_number")
+    val pageNumber: Int,
+    
+    @ColumnInfo(name = "shape_type")
+    val shapeType: String, // LINE, RECTANGLE, CIRCLE, ARROW
+    
+    @ColumnInfo(name = "start_x")
+    val startX: Float,
+    
+    @ColumnInfo(name = "start_y")
+    val startY: Float,
+    
+    @ColumnInfo(name = "end_x")
+    val endX: Float,
+    
+    @ColumnInfo(name = "end_y")
+    val endY: Float,
+    
+    @ColumnInfo(name = "color")
+    val color: Long,
+    
+    @ColumnInfo(name = "stroke_width")
+    val strokeWidth: Float,
+    
+    @ColumnInfo(name = "is_filled")
+    val isFilled: Boolean = false,
+    
+    @ColumnInfo(name = "created_at")
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+/**
  * Entity representing a custom bookmark in a PDF document.
  */
 @Entity(
@@ -170,19 +248,80 @@ interface RecentDocumentDao {
 }
 
 /**
+ * DAO for ink annotation operations.
+ */
+@Dao
+interface InkAnnotationDao {
+    @Query("SELECT * FROM ink_annotations WHERE document_path = :documentPath ORDER BY page_number ASC, created_at ASC")
+    suspend fun getAnnotationsForDocument(documentPath: String): List<InkAnnotationEntity>
+    
+    @Query("SELECT * FROM ink_annotations WHERE document_path = :documentPath AND page_number = :pageNumber ORDER BY created_at ASC")
+    suspend fun getAnnotationsForPage(documentPath: String, pageNumber: Int): List<InkAnnotationEntity>
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnnotation(annotation: InkAnnotationEntity)
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnnotations(annotations: List<InkAnnotationEntity>)
+    
+    @Delete
+    suspend fun deleteAnnotation(annotation: InkAnnotationEntity)
+    
+    @Query("DELETE FROM ink_annotations WHERE id = :annotationId")
+    suspend fun deleteAnnotationById(annotationId: String)
+    
+    @Query("DELETE FROM ink_annotations WHERE document_path = :documentPath")
+    suspend fun deleteAllForDocument(documentPath: String)
+    
+    @Query("DELETE FROM ink_annotations WHERE document_path = :documentPath AND page_number = :pageNumber")
+    suspend fun deleteAllForPage(documentPath: String, pageNumber: Int)
+}
+
+/**
+ * DAO for shape annotation operations.
+ */
+@Dao
+interface ShapeAnnotationDao {
+    @Query("SELECT * FROM shape_annotations WHERE document_path = :documentPath ORDER BY page_number ASC, created_at ASC")
+    suspend fun getAnnotationsForDocument(documentPath: String): List<ShapeAnnotationEntity>
+    
+    @Query("SELECT * FROM shape_annotations WHERE document_path = :documentPath AND page_number = :pageNumber ORDER BY created_at ASC")
+    suspend fun getAnnotationsForPage(documentPath: String, pageNumber: Int): List<ShapeAnnotationEntity>
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnnotation(annotation: ShapeAnnotationEntity)
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnnotations(annotations: List<ShapeAnnotationEntity>)
+    
+    @Delete
+    suspend fun deleteAnnotation(annotation: ShapeAnnotationEntity)
+    
+    @Query("DELETE FROM shape_annotations WHERE id = :annotationId")
+    suspend fun deleteAnnotationById(annotationId: String)
+    
+    @Query("DELETE FROM shape_annotations WHERE document_path = :documentPath")
+    suspend fun deleteAllForDocument(documentPath: String)
+}
+
+/**
  * Room database for the PDF reader application.
  */
 @Database(
     entities = [
         BookmarkEntity::class,
         MiniNoteEntity::class,
-        RecentDocumentEntity::class
+        RecentDocumentEntity::class,
+        InkAnnotationEntity::class,
+        ShapeAnnotationEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class PdfReaderDatabase : RoomDatabase() {
     abstract fun bookmarkDao(): BookmarkDao
     abstract fun miniNoteDao(): MiniNoteDao
     abstract fun recentDocumentDao(): RecentDocumentDao
+    abstract fun inkAnnotationDao(): InkAnnotationDao
+    abstract fun shapeAnnotationDao(): ShapeAnnotationDao
 }

@@ -22,6 +22,7 @@ import com.ospdf.reader.ui.tools.TextAnnotation
 import com.ospdf.reader.ui.tools.LassoSelection
 import com.ospdf.reader.ui.theme.InkColors
 import com.ospdf.reader.data.local.RecentDocumentsRepository
+import com.ospdf.reader.data.local.AnnotationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -62,7 +63,8 @@ class ReaderViewModel @Inject constructor(
     private val annotationManager: AnnotationManager,
     private val recentDocumentsRepository: RecentDocumentsRepository,
     private val googleDriveSync: GoogleDriveSync,
-    private val preferencesManager: PreferencesManager
+    private val preferencesManager: PreferencesManager,
+    private val annotationRepository: AnnotationRepository
 ) : ViewModel() {
 
     // Render scale used for MuPDF bitmap generation (applied as DPI multiplier).
@@ -185,6 +187,9 @@ class ReaderViewModel @Inject constructor(
                     }
                     // Pre-render first few pages
                     preRenderPages(0, minOf(3, document.pageCount))
+                    
+                    // Load saved annotations from database
+                    loadAnnotationsFromDatabase(document.path)
                 },
                 onFailure = { error ->
                     _uiState.update {
@@ -195,6 +200,56 @@ class ReaderViewModel @Inject constructor(
                     }
                 }
             )
+        }
+    }
+    
+    /**
+     * Loads all saved annotations from the database for the current document.
+     */
+    private fun loadAnnotationsFromDatabase(documentPath: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Load ink strokes
+                val savedStrokes = annotationRepository.loadInkStrokes(documentPath)
+                savedStrokes.forEach { (pageNumber, strokes) ->
+                    _pageStrokes[pageNumber] = strokes.toMutableList()
+                    withContext(Dispatchers.Main) {
+                        updatePageStrokes(pageNumber)
+                    }
+                }
+                
+                // Load shape annotations
+                val savedShapes = annotationRepository.loadShapes(documentPath)
+                savedShapes.forEach { (pageNumber, shapes) ->
+                    _pageShapes[pageNumber] = shapes.toMutableList()
+                    withContext(Dispatchers.Main) {
+                        updatePageShapes(pageNumber)
+                    }
+                }
+            } catch (e: Exception) {
+                // Log error but don't crash - annotations just won't be loaded
+                e.printStackTrace()
+            }
+        }
+    }
+    
+    /**
+     * Saves all annotations for the current document to the database.
+     */
+    private fun saveAnnotationsToDatabase() {
+        val documentPath = currentDocumentPath
+        if (documentPath.isEmpty()) return
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Save ink strokes
+                annotationRepository.saveAllInkStrokes(documentPath, _pageStrokes.mapValues { it.value.toList() })
+                
+                // Save shape annotations
+                annotationRepository.saveAllShapes(documentPath, _pageShapes.mapValues { it.value.toList() })
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
     
@@ -396,6 +451,9 @@ class ReaderViewModel @Inject constructor(
         
         pageShapesFlows.getOrPut(pageIndex) { MutableStateFlow(emptyList()) }.value = shapes.toList()
         _uiState.update { it.copy(hasUnsavedChanges = true) }
+        
+        // Persist to database
+        saveAnnotationsToDatabase()
     }
     
     /**
@@ -443,6 +501,9 @@ class ReaderViewModel @Inject constructor(
         
         _currentSelection.value = null
         _uiState.update { it.copy(hasUnsavedChanges = true) }
+        
+        // Persist to database
+        saveAnnotationsToDatabase()
     }
     
     /**
@@ -511,6 +572,16 @@ class ReaderViewModel @Inject constructor(
     }
     
     /**
+     * Commits the current selection move and persists to database.
+     * Call this when drag ends.
+     */
+    fun commitSelectionMove() {
+        if (_currentSelection.value != null) {
+            saveAnnotationsToDatabase()
+        }
+    }
+    
+    /**
      * Adds a completed stroke to the current page.
      */
     fun addStroke(stroke: InkStroke) {
@@ -528,6 +599,9 @@ class ReaderViewModel @Inject constructor(
         updateUndoRedoState()
         
         _uiState.update { it.copy(hasUnsavedChanges = true) }
+        
+        // Persist to database
+        saveAnnotationsToDatabase()
     }
     
     /**
@@ -550,6 +624,9 @@ class ReaderViewModel @Inject constructor(
         updateUndoRedoState()
         
         _uiState.update { it.copy(hasUnsavedChanges = true) }
+        
+        // Persist to database
+        saveAnnotationsToDatabase()
     }
     
     /**
@@ -562,6 +639,7 @@ class ReaderViewModel @Inject constructor(
         if (undoRedoManager.undo(strokes)) {
             updatePageStrokes(pageIndex)
             updateUndoRedoState()
+            saveAnnotationsToDatabase()
         }
     }
     
@@ -575,12 +653,18 @@ class ReaderViewModel @Inject constructor(
         if (undoRedoManager.redo(strokes)) {
             updatePageStrokes(pageIndex)
             updateUndoRedoState()
+            saveAnnotationsToDatabase()
         }
     }
     
     private fun updatePageStrokes(pageIndex: Int) {
         val strokes = _pageStrokes[pageIndex]?.toList() ?: emptyList()
         pageStrokesFlows.getOrPut(pageIndex) { MutableStateFlow(emptyList()) }.value = strokes
+    }
+    
+    private fun updatePageShapes(pageIndex: Int) {
+        val shapes = _pageShapes[pageIndex]?.toList() ?: emptyList()
+        pageShapesFlows.getOrPut(pageIndex) { MutableStateFlow(emptyList()) }.value = shapes
     }
     
     private fun updateUndoRedoState() {
