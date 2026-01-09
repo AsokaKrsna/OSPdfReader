@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import com.ospdf.reader.domain.model.ShapeType
 import com.ospdf.reader.domain.model.ToolState
@@ -59,6 +60,9 @@ fun ShapeCanvas(
     shapes: List<ShapeAnnotation>,
     toolState: ToolState,
     enabled: Boolean = true,
+    zoomScale: Float = 1f,
+    zoomOffset: Offset = Offset.Zero,
+    containerSize: IntSize = IntSize.Zero,
     onShapeComplete: (ShapeAnnotation) -> Unit = {},
     onShapeErase: (String) -> Unit = {}
 ) {
@@ -70,6 +74,14 @@ fun ShapeCanvas(
     val currentToolState by rememberUpdatedState(toolState)
     val currentEnabled by rememberUpdatedState(enabled)
     val currentOnShapeComplete by rememberUpdatedState(onShapeComplete)
+    val currentZoomScale by rememberUpdatedState(zoomScale)
+    
+    // Transform screen coordinates to content coordinates (accounting for zoom/pan)
+    fun transformPoint(screenX: Float, screenY: Float): Offset {
+        val contentX = (screenX - zoomOffset.x) / zoomScale
+        val contentY = (screenY - zoomOffset.y) / zoomScale
+        return Offset(contentX, contentY)
+    }
     
     Box(modifier = modifier.fillMaxSize()) {
         // Drawing canvas
@@ -103,34 +115,29 @@ fun ShapeCanvas(
                         
                         val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS ||
                                        event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
-                        val isFinger = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
                         
-                        // Let finger input pass through for page navigation
-                        if (isFinger) {
-                            return false
-                        }
+                        // Let Compose handle all finger gestures (zoom, pan, double-tap)
+                        if (!isStylus) return false
                         
-                        // Allow multi-touch for zoom/pan
-                        if (event.pointerCount > 1) {
-                            parent?.requestDisallowInterceptTouchEvent(false)
-                            return false
-                        }
+                        // When zoomed in, disable drawing - let user zoom out first
+                        if (currentZoomScale > 1.05f) return false
                         
                         // Prevent parent from intercepting stylus
-                        if (isStylus && event.action == MotionEvent.ACTION_DOWN) {
+                        if (event.action == MotionEvent.ACTION_DOWN) {
                             parent?.requestDisallowInterceptTouchEvent(true)
                         }
                         
                         return when (event.action) {
                             MotionEvent.ACTION_DOWN -> {
                                 isDrawing = true
-                                startPoint = Offset(event.x, event.y)
-                                currentPoint = Offset(event.x, event.y)
+                                val transformed = transformPoint(event.x, event.y)
+                                startPoint = transformed
+                                currentPoint = transformed
                                 true
                             }
                             MotionEvent.ACTION_MOVE -> {
                                 if (isDrawing) {
-                                    currentPoint = Offset(event.x, event.y)
+                                    currentPoint = transformPoint(event.x, event.y)
                                 }
                                 true
                             }

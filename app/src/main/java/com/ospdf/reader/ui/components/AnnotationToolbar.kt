@@ -18,6 +18,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -44,6 +46,7 @@ fun AnnotationToolbar(
     toolState: ToolState,
     canUndo: Boolean,
     canRedo: Boolean,
+    isZoomedIn: Boolean = false,
     onToolSelected: (AnnotationTool) -> Unit,
     onColorSelected: (Color) -> Unit,
     onStrokeWidthChanged: (Float) -> Unit,
@@ -76,20 +79,35 @@ fun AnnotationToolbar(
         modifier = modifier
             .padding(horizontal = 16.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isZoomedIn) 0.6f else 0.95f))
+            .then(
+                if (isZoomedIn) Modifier.blur(2.dp) else Modifier
+            )
             .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Zoom indicator message
+        if (isZoomedIn) {
+            Text(
+                text = "Pinch to zoom out to draw",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+        
         // Main tool row
         Row(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.alpha(if (isZoomedIn) 0.5f else 1f)
         ) {
             // Close button
             ToolbarIconButton(
                 icon = Icons.Filled.Close,
                 contentDescription = "Close tools",
-                onClick = onClose
+                onClick = onClose,
+                enabled = !isZoomedIn
             )
             
             Box(modifier = Modifier.width(1.dp).height(32.dp).background(MaterialTheme.colorScheme.outlineVariant))

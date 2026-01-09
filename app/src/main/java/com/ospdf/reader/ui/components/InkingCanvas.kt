@@ -12,6 +12,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import com.ospdf.reader.domain.model.AnnotationTool
 import com.ospdf.reader.domain.model.StrokePoint
@@ -65,6 +66,7 @@ data class InkStroke(
  * - Stylus-only annotation (finger passes through for page navigation)
  * - Smooth curve rendering with quadratic beziers
  * - Uses requestDisallowInterceptTouchEvent to prevent pager from stealing stylus events
+ * - Supports zoom/pan coordinate transformation
  */
 @Composable
 fun InkingCanvas(
@@ -73,6 +75,9 @@ fun InkingCanvas(
     toolState: ToolState,
     textLines: List<com.ospdf.reader.data.pdf.TextLine> = emptyList(),
     enabled: Boolean = true,
+    zoomScale: Float = 1f,
+    zoomOffset: Offset = Offset.Zero,
+    containerSize: IntSize = IntSize.Zero,
     onStrokeStart: () -> Unit = {},
     onStrokeEnd: (InkStroke) -> Unit = {},
     onStrokeErase: (String) -> Unit = {},
@@ -88,6 +93,7 @@ fun InkingCanvas(
     val currentToolState by rememberUpdatedState(toolState)
     val currentStrokes by rememberUpdatedState(strokes)
     val currentTextLines by rememberUpdatedState(textLines)
+    val currentZoomScale by rememberUpdatedState(zoomScale)
     val currentEnabled by rememberUpdatedState(enabled)
     val currentOnStrokeStart by rememberUpdatedState(onStrokeStart)
     val currentOnStrokeEnd by rememberUpdatedState(onStrokeEnd)
@@ -159,7 +165,7 @@ fun InkingCanvas(
             }
         }
         
-        // Invisible touch interceptor using AndroidView for proper parent touch interception control
+        // Invisible touch interceptor using AndroidView for stylus-only input
         AndroidView(
             factory = { context ->
                 object : View(context) {
@@ -168,33 +174,19 @@ fun InkingCanvas(
                         
                         val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS ||
                                        event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
-                        val isFinger = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
                         
-                        // In NONE mode, let everything pass through
-                        if (currentToolState.currentTool == AnnotationTool.NONE) {
-                            if (event.action == MotionEvent.ACTION_UP) {
-                                val now = System.currentTimeMillis()
-                                if (now - lastTapTime < 300) {
-                                    currentOnTap()
-                                }
-                                lastTapTime = now
-                            }
+                        // In NONE mode or not stylus, let everything pass through to Compose
+                        if (currentToolState.currentTool == AnnotationTool.NONE || !isStylus) {
                             return false
                         }
                         
-                        // STYLUS ONLY DRAWING: Let finger input pass through for page navigation
-                        if (isFinger) {
-                            return false
-                        }
-                        
-                        // Allow multi-touch for zoom/pan
-                        if (event.pointerCount > 1) {
-                            parent?.requestDisallowInterceptTouchEvent(false)
+                        // When zoomed in, disable drawing
+                        if (currentZoomScale > 1.05f) {
                             return false
                         }
                         
                         // For stylus input, prevent parent from intercepting
-                        if (isStylus && event.action == MotionEvent.ACTION_DOWN) {
+                        if (event.action == MotionEvent.ACTION_DOWN) {
                             parent?.requestDisallowInterceptTouchEvent(true)
                         }
                         
@@ -212,18 +204,15 @@ fun InkingCanvas(
                                 )
                                 currentPoints = listOf(point)
                                 
-                                // For eraser, check if we hit any stroke
                                 if (currentToolState.currentTool == AnnotationTool.ERASER) {
                                     checkEraserHit(event.x, event.y, currentStrokes, currentOnStrokeErase)
                                 }
-                                
                                 true
                             }
                             MotionEvent.ACTION_MOVE -> {
                                 if (isDrawing) {
                                     val newPoints = mutableListOf<StrokePoint>()
                                     
-                                    // Handle historical events for smoother curves
                                     for (i in 0 until event.historySize) {
                                         newPoints.add(
                                             StrokePoint(
@@ -246,7 +235,6 @@ fun InkingCanvas(
                                     
                                     currentPoints = currentPoints + newPoints
                                     
-                                    // For eraser, continuously check hits
                                     if (currentToolState.currentTool == AnnotationTool.ERASER) {
                                         for (point in newPoints) {
                                             checkEraserHit(point.x, point.y, currentStrokes, currentOnStrokeErase)
@@ -279,7 +267,7 @@ fun InkingCanvas(
                                             
                                             val nearestLine = currentTextLines.minByOrNull { line ->
                                                 val lineCenter = line.y + line.height / 2
-                                                abs(lineCenter - avgY)
+                                                kotlin.math.abs(lineCenter - avgY)
                                             }?.takeIf { line ->
                                                 avgY >= line.y - line.height && avgY <= line.y + line.height * 2
                                             }
