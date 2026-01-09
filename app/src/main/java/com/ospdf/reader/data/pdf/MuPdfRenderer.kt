@@ -256,6 +256,33 @@ class MuPdfRenderer @Inject constructor(
         }
     }
     
+    /**
+     * Temporarily closes the document for external modification.
+     * Returns a pair of (cachedPath, uri) that can be used to reopen.
+     */
+    suspend fun closeForModification(): Pair<String, Uri>? {
+        return mutex.withLock {
+            val uri = currentUri ?: return@withLock null
+            val doc = document ?: return@withLock null
+            
+            // Get the cached file path before closing
+            val cachedPath = when (uri.scheme) {
+                "file" -> uri.path!!
+                else -> File(context.cacheDir, "pdf_cache/${getFileName(uri) ?: "document.pdf"}").absolutePath
+            }
+            
+            closeDocumentInternal()
+            Pair(cachedPath, uri)
+        }
+    }
+    
+    /**
+     * Reopens the document after external modification.
+     */
+    suspend fun reopenDocument(uri: Uri): Result<PdfDocument> {
+        return openDocument(uri)
+    }
+    
     private fun closeDocumentInternal() {
         document?.destroy()
         document = null

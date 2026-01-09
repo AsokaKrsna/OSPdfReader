@@ -43,6 +43,7 @@ data class ReaderUiState(
     val isLoading: Boolean = true,
     val isSaving: Boolean = false,
     val error: String? = null,
+    val successMessage: String? = null,
     val toolState: ToolState = ToolState(),
     val showSearch: Boolean = false,
     val showBookmarks: Boolean = false,
@@ -96,8 +97,9 @@ class ReaderViewModel @Inject constructor(
     // Undo/redo manager
     private val undoRedoManager = UndoRedoManager()
     
-    // Currently open document path
+    // Currently open document path and URI
     private var currentDocumentPath: String = ""
+    private var currentDocumentUri: Uri? = null
     
     // Text lines cache for smart highlighter
     private val textLinesCache = mutableMapOf<Int, List<com.ospdf.reader.data.pdf.TextLine>>()
@@ -163,6 +165,7 @@ class ReaderViewModel @Inject constructor(
             pdfRenderer.openDocument(uri).fold(
                 onSuccess = { document ->
                     currentDocumentPath = document.path
+                    currentDocumentUri = uri
                     // Record recent open
                     viewModelScope.launch(Dispatchers.IO) {
                         recentDocumentsRepository.recordOpen(
@@ -750,6 +753,146 @@ class ReaderViewModel @Inject constructor(
     
     fun toggleMoreMenu() {
         _uiState.update { it.copy(showMoreMenu = !it.showMoreMenu) }
+    }
+    
+    fun dismissMoreMenu() {
+        _uiState.update { it.copy(showMoreMenu = false) }
+    }
+    
+    fun clearSuccessMessage() {
+        _uiState.update { it.copy(successMessage = null) }
+    }
+    
+    /**
+     * Flattens all annotations permanently into the original PDF file.
+     * This saves annotations directly to the original file, preserving Google backup sync.
+     */
+    fun flattenAnnotationsToPdf() {
+        val hasAnnotations = _pageStrokes.values.any { it.isNotEmpty() } || 
+                             _pageShapes.values.any { it.isNotEmpty() }
+        
+        if (!hasAnnotations) {
+            _uiState.update { it.copy(error = "No annotations to flatten") }
+            return
+        }
+        
+        val uri = currentDocumentUri
+        if (uri == null) {
+            _uiState.update { it.copy(error = "Cannot save: document URI not available") }
+            return
+        }
+        
+        viewModelScope.launch(Dispatchers.Main) {
+            _uiState.update { it.copy(isSaving = true, showMoreMenu = false) }
+            
+            // Collect annotations before any async operations
+            val strokesMap = _pageStrokes.mapValues { it.value.toList() }
+            val shapesMap = _pageShapes.mapValues { it.value.toList() }
+            val savedDocumentPath = currentDocumentPath
+            
+            try {
+                // Close document first so we can modify the file (on IO thread)
+                withContext(Dispatchers.IO) {
+                    pdfRenderer.closeDocument()
+                }
+                
+                // Save annotations directly to the original file
+                val saveResult = annotationManager.saveAnnotationsToOriginalFile(
+                    originalUri = uri,
+                    sourcePath = savedDocumentPath,
+                    strokes = strokesMap,
+                    shapes = shapesMap
+                )
+                
+                if (saveResult.isSuccess) {
+                    // Clear in-memory annotations since they're now in the PDF
+                    _pageStrokes.clear()
+                    _pageShapes.clear()
+                    _pageTexts.clear()
+                    
+                    // Update all annotation flows
+                    pageStrokesFlows.forEach { (_, flow) -> flow.value = emptyList() }
+                    pageShapesFlows.forEach { (_, flow) -> flow.value = emptyList() }
+                    pageTextsFlows.forEach { (_, flow) -> flow.value = emptyList() }
+                    
+                    // Delete annotations from database (fire and forget)
+                    viewModelScope.launch(Dispatchers.IO) {
+                        try {
+                            annotationRepository.saveAllInkStrokes(savedDocumentPath, emptyMap())
+                            annotationRepository.saveAllShapes(savedDocumentPath, emptyMap())
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                    
+                    // Clear page cache and reset bitmap flows
+                    pageCache.values.forEach { bitmap ->
+                        try { bitmap.recycle() } catch (_: Exception) {}
+                    }
+                    pageCache.clear()
+                    pageBitmapFlows.forEach { (_, flow) -> flow.value = null }
+                    
+                    // Reopen the document
+                    val reopenResult = pdfRenderer.reopenDocument(uri)
+                    
+                    if (reopenResult.isSuccess) {
+                        val doc = reopenResult.getOrNull()!!
+                        currentDocumentPath = doc.path
+                        currentDocumentUri = uri
+                        
+                        _uiState.update { 
+                            it.copy(
+                                isSaving = false,
+                                hasUnsavedChanges = false,
+                                error = null,
+                                successMessage = "Annotations saved permanently to PDF"
+                            )
+                        }
+                        
+                        // Re-render current page
+                        val currentPage = _uiState.value.currentPage
+                        withContext(Dispatchers.IO) {
+                            renderPage(currentPage)
+                        }
+                    } else {
+                        _uiState.update { 
+                            it.copy(
+                                isSaving = false,
+                                hasUnsavedChanges = false,
+                                error = null,
+                                successMessage = "Saved! Please reopen the file to see changes."
+                            )
+                        }
+                    }
+                } else {
+                    // Save failed - try to reopen document
+                    try {
+                        pdfRenderer.reopenDocument(uri)
+                    } catch (_: Exception) {}
+                    
+                    _uiState.update { 
+                        it.copy(
+                            isSaving = false,
+                            error = "Failed to save: ${saveResult.exceptionOrNull()?.message ?: "Unknown error"}"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                
+                // Try to reopen document on exception
+                try {
+                    pdfRenderer.reopenDocument(uri)
+                } catch (_: Exception) {}
+                
+                _uiState.update { 
+                    it.copy(
+                        isSaving = false,
+                        error = "Failed to save: ${e.message}"
+                    )
+                }
+            }
+        }
     }
     
     override fun onCleared() {

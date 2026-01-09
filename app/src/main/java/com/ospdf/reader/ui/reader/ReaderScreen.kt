@@ -52,10 +52,22 @@ fun ReaderScreen(
     val uiState by viewModel.uiState.collectAsState()
     val currentSelection by viewModel.currentSelection.collectAsState()
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     
     // Initialize document on first composition
     LaunchedEffect(fileUri) {
         viewModel.loadDocument(fileUri)
+    }
+    
+    // Show success message in snackbar
+    LaunchedEffect(uiState.successMessage) {
+        uiState.successMessage?.let { message ->
+            snackbarHostState.showSnackbar(
+                message = message,
+                duration = SnackbarDuration.Short
+            )
+            viewModel.clearSuccessMessage()
+        }
     }
     
     // Pager state for page navigation
@@ -80,6 +92,7 @@ fun ReaderScreen(
     val zoomOffset = Offset.Zero
     
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             AnimatedVisibility(
                 visible = showControls && !uiState.showAnnotationToolbar,
@@ -89,12 +102,15 @@ fun ReaderScreen(
                 ReaderTopBar(
                     title = uiState.documentName,
                     hasUnsavedChanges = uiState.hasUnsavedChanges,
+                    showMoreMenu = uiState.showMoreMenu,
                     onBack = onBack,
                     onSearch = { viewModel.toggleSearch() },
                     onBookmarks = { viewModel.toggleBookmarks() },
                     onAnnotate = { viewModel.openAnnotationMode() },
                     onSave = { viewModel.saveAnnotations() },
-                    onMore = { viewModel.toggleMoreMenu() }
+                    onMore = { viewModel.toggleMoreMenu() },
+                    onDismissMenu = { viewModel.dismissMoreMenu() },
+                    onFlattenAnnotations = { viewModel.flattenAnnotationsToPdf() }
                 )
             }
         },
@@ -500,12 +516,15 @@ private fun PdfPageWithAnnotations(
 private fun ReaderTopBar(
     title: String,
     hasUnsavedChanges: Boolean,
+    showMoreMenu: Boolean,
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onBookmarks: () -> Unit,
     onAnnotate: () -> Unit,
     onSave: () -> Unit,
-    onMore: () -> Unit
+    onMore: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onFlattenAnnotations: () -> Unit
 ) {
     TopAppBar(
         title = {
@@ -551,8 +570,25 @@ private fun ReaderTopBar(
             IconButton(onClick = onBookmarks) {
                 Icon(Icons.Outlined.Bookmarks, contentDescription = "Bookmarks")
             }
-            IconButton(onClick = onMore) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "More")
+            Box {
+                IconButton(onClick = onMore) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                }
+                DropdownMenu(
+                    expanded = showMoreMenu,
+                    onDismissRequest = onDismissMenu
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Make Annotations Permanent") },
+                        onClick = onFlattenAnnotations,
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Lock,
+                                contentDescription = null
+                            )
+                        }
+                    )
+                }
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
