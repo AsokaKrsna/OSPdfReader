@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OSPdfReader</string>
+    
+    <!-- File Browser -->
+    <string name="browse_files">Browse Files</string>
+    <string name="recent_files">Recent Files</string>
+    <string name="no_files">No PDF files found</string>
+    <string name="open_file">Open File</string>
+    <string name="storage_permission_required">Storage permission is required to access PDF files</string>
+    <string name="grant_permission">Grant Permission</string>
+    
+    <!-- Reader -->
+    <string name="page_indicator">Page %1$d of %2$d</string>
+    <string name="loading">Loading…</string>
+    <string name="error_loading_pdf">Failed to load PDF</string>
+    <string name="zoom_in">Zoom In</string>
+    <string name="zoom_out">Zoom Out</string>
+    <string name="fit_page">Fit Page</string>
+    <string name="fit_width">Fit Width</string>
+    
+    <!-- Toolbar -->
+    <string name="pen">Pen</string>
+    <string name="highlighter">Highlighter</string>
+    <string name="eraser">Eraser</string>
+    <string name="shapes">Shapes</string>
+    <string name="text">Text</string>
+    <string name="lasso">Lasso</string>
+    <string name="undo">Undo</string>
+    <string name="redo">Redo</string>
+    <string name="color">Color</string>
+    <string name="stroke_width">Stroke Width</string>
+    
+    <!-- Shapes -->
+    <string name="line">Line</string>
+    <string name="rectangle">Rectangle</string>
+    <string name="circle">Circle</string>
+    <string name="arrow">Arrow</string>
+    
+    <!-- Bookmarks -->
+    <string name="bookmarks">Bookmarks</string>
+    <string name="add_bookmark">Add Bookmark</string>
+    <string name="bookmark_name">Bookmark Name</string>
+    <string name="delete_bookmark">Delete Bookmark</string>
+    
+    <!-- Search -->
+    <string name="search">Search</string>
+    <string name="search_hint">Search in document…</string>
+    <string name="no_results">No results found</string>
+    <string name="result_count">%1$d of %2$d</string>
+    
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="appearance">Appearance</string>
+    <string name="dark_mode">Dark Mode</string>
+    <string name="reading_mode">Reading Mode</string>
+    <string name="horizontal_swipe">Horizontal Swipe (Book)</string>
+    <string name="vertical_scroll">Vertical Scroll</string>
+    <string name="sync">Sync</string>
+    <string name="google_drive">Google Drive</string>
+    <string name="connect_drive">Connect Google Drive</string>
+    <string name="disconnect_drive">Disconnect</string>
+    <string name="sync_enabled">Auto-sync enabled</string>
+    <string name="last_synced">Last synced: %1$s</string>
+    
+    <!-- Export -->
+    <string name="export">Export</string>
+    <string name="export_flattened">Export Flattened PDF</string>
+    <string name="exporting">Exporting…</string>
+    <string name="export_success">PDF exported successfully</string>
+    <string name="export_failed">Export failed</string>
+    
+    <!-- General -->
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="delete">Delete</string>
+    <string name="close">Close</string>
+    <string name="done">Done</string>
+</resources>

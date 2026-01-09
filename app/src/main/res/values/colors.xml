@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary colors - Deep blue for professionalism -->
+    <color name="primary">#2563EB</color>
+    <color name="primary_variant">#1D4ED8</color>
+    <color name="on_primary">#FFFFFF</color>
+    
+    <!-- Secondary colors - Warm accent -->
+    <color name="secondary">#F59E0B</color>
+    <color name="secondary_variant">#D97706</color>
+    <color name="on_secondary">#000000</color>
+    
+    <!-- Background colors -->
+    <color name="background">#FAFAFA</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="on_background">#1F2937</color>
+    <color name="on_surface">#1F2937</color>
+    
+    <!-- Error -->
+    <color name="error">#DC2626</color>
+    <color name="on_error">#FFFFFF</color>
+    
+    <!-- Dark theme variants -->
+    <color name="background_dark">#111827</color>
+    <color name="surface_dark">#1F2937</color>
+    <color name="on_background_dark">#F9FAFB</color>
+    <color name="on_surface_dark">#F9FAFB</color>
+    
+    <!-- Annotation colors -->
+    <color name="ink_black">#000000</color>
+    <color name="ink_blue">#2563EB</color>
+    <color name="ink_red">#DC2626</color>
+    <color name="ink_green">#059669</color>
+    <color name="ink_yellow">#FBBF24</color>
+    <color name="ink_orange">#F97316</color>
+    <color name="ink_purple">#7C3AED</color>
+    
+    <!-- Highlighter colors (with alpha) -->
+    <color name="highlight_yellow">#80FBBF24</color>
+    <color name="highlight_green">#8034D399</color>
+    <color name="highlight_blue">#8060A5FA</color>
+    <color name="highlight_pink">#80F472B6</color>
+    <color name="highlight_orange">#80FB923C</color>
+</resources>

@@ -1,0 +1,131 @@
+package com.ospdf.reader.di
+
+import android.content.Context
+import androidx.room.Room
+import com.ospdf.reader.data.cloud.GoogleDriveAuth
+import com.ospdf.reader.data.cloud.GoogleDriveSync
+import com.ospdf.reader.data.export.PdfExporter
+import com.ospdf.reader.data.local.BookmarkDao
+import com.ospdf.reader.data.local.MiniNoteDao
+import com.ospdf.reader.data.local.PdfReaderDatabase
+import com.ospdf.reader.data.local.RecentDocumentDao
+import com.ospdf.reader.data.local.RecentDocumentsRepository
+import com.ospdf.reader.data.ocr.OcrEngine
+import com.ospdf.reader.data.pdf.AnnotationManager
+import com.ospdf.reader.data.pdf.HyperlinkHandler
+import com.ospdf.reader.data.pdf.MuPdfRenderer
+import com.ospdf.reader.domain.usecase.SearchEngine
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+
+/**
+ * Hilt module for app-wide dependencies.
+ */
+@Module
+@InstallIn(SingletonComponent::class)
+object AppModule {
+    
+    @Provides
+    @Singleton
+    fun provideDatabase(
+        @ApplicationContext context: Context
+    ): PdfReaderDatabase {
+        return Room.databaseBuilder(
+            context,
+            PdfReaderDatabase::class.java,
+            "pdf_reader_db"
+        ).build()
+    }
+    
+    @Provides
+    fun provideBookmarkDao(database: PdfReaderDatabase): BookmarkDao {
+        return database.bookmarkDao()
+    }
+    
+    @Provides
+    fun provideMiniNoteDao(database: PdfReaderDatabase): MiniNoteDao {
+        return database.miniNoteDao()
+    }
+    
+    @Provides
+    fun provideRecentDocumentDao(database: PdfReaderDatabase): RecentDocumentDao {
+        return database.recentDocumentDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideRecentDocumentsRepository(
+        recentDocumentDao: RecentDocumentDao
+    ): RecentDocumentsRepository {
+        return RecentDocumentsRepository(recentDocumentDao)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideMuPdfRenderer(
+        @ApplicationContext context: Context
+    ): MuPdfRenderer {
+        return MuPdfRenderer(context)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideAnnotationManager(
+        @ApplicationContext context: Context
+    ): AnnotationManager {
+        return AnnotationManager(context)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideOcrEngine(
+        @ApplicationContext context: Context
+    ): OcrEngine {
+        return OcrEngine(context)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideSearchEngine(
+        pdfRenderer: MuPdfRenderer
+    ): SearchEngine {
+        return SearchEngine(pdfRenderer)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideHyperlinkHandler(
+        @ApplicationContext context: Context
+    ): HyperlinkHandler {
+        return HyperlinkHandler(context)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideGoogleDriveAuth(
+        @ApplicationContext context: Context
+    ): GoogleDriveAuth {
+        return GoogleDriveAuth(context)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideGoogleDriveSync(
+        auth: GoogleDriveAuth
+    ): GoogleDriveSync {
+        return GoogleDriveSync(auth)
+    }
+    
+    @Provides
+    @Singleton
+    fun providePdfExporter(
+        @ApplicationContext context: Context,
+        annotationManager: AnnotationManager
+    ): PdfExporter {
+        return PdfExporter(context, annotationManager)
+    }
+}

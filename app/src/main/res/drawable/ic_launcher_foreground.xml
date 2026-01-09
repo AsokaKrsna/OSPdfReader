@@ -1,0 +1,37 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Background circle (inset for adaptive icon safe zone) -->
+    <group android:translateX="22" android:translateY="22">
+        <!-- PDF document icon -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M12,2C10.9,2 10,2.9 10,4L10,20C10,21.1 10.9,22 12,22L52,22C53.1,22 54,21.1 54,20L54,14L40,0L12,2Z"/>
+        
+        <!-- Document page fold -->
+        <path
+            android:fillColor="#E3E3E3"
+            android:pathData="M40,0L40,12C40,13.1 40.9,14 42,14L54,14L40,0Z"/>
+        
+        <!-- "PDF" text representation - 3 lines -->
+        <path
+            android:fillColor="#2563EB"
+            android:pathData="M16,26L36,26L36,28L16,28Z"/>
+        <path
+            android:fillColor="#2563EB"
+            android:pathData="M16,32L48,32L48,34L16,34Z"/>
+        <path
+            android:fillColor="#2563EB"
+            android:pathData="M16,38L44,38L44,40L16,40Z"/>
+        
+        <!-- Pen/stylus icon overlay -->
+        <path
+            android:fillColor="#F59E0B"
+            android:pathData="M48,40L60,28C61.17,26.83 61.17,24.93 60,23.76L56.24,20C55.07,18.83 53.17,18.83 52,20L40,32L40,44L52,44C52,44 48,40 48,40Z"/>
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M42,34L50,26L54,30L46,38L42,38L42,34Z"/>
+    </group>
+</vector>
