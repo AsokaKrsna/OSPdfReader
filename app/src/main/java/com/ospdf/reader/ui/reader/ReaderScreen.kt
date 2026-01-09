@@ -160,8 +160,8 @@ fun ReaderScreen(
                             HorizontalPager(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize(),
-                                // Disable scrolling when annotation tool is active
-                                userScrollEnabled = !isAnnotationMode
+                                // Allow finger scrolling - stylus only for annotations
+                                userScrollEnabled = true
                             ) { pageIndex ->
                                 PdfPageWithAnnotations(
                                     pageIndex = pageIndex,
@@ -175,8 +175,8 @@ fun ReaderScreen(
                             VerticalPager(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize(),
-                                // Disable scrolling when annotation tool is active
-                                userScrollEnabled = !isAnnotationMode
+                                // Allow finger scrolling - stylus only for annotations
+                                userScrollEnabled = true
                             ) { pageIndex ->
                                 PdfPageWithAnnotations(
                                     pageIndex = pageIndex,

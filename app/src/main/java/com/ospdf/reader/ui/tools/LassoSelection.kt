@@ -1,17 +1,18 @@
 package com.ospdf.reader.ui.tools
 
 import android.view.MotionEvent
+import android.view.View
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.viewinterop.AndroidView
 import com.ospdf.reader.ui.components.InkStroke
 import com.ospdf.reader.ui.theme.InkColors
 import kotlin.math.abs
@@ -34,8 +35,8 @@ data class LassoSelection(
 /**
  * Canvas for lasso selection of annotations.
  * Allows selecting, moving, and deleting groups of strokes/shapes.
+ * Uses stylus-only input with finger pass-through for page navigation.
  */
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun LassoSelectionCanvas(
     modifier: Modifier = Modifier,
@@ -52,69 +53,107 @@ fun LassoSelectionCanvas(
     var isDragging by remember { mutableStateOf(false) }
     var lastDragPoint by remember { mutableStateOf<Offset?>(null) }
     
-    Canvas(
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInteropFilter { event ->
-                if (!enabled) return@pointerInteropFilter false
-                
-                val point = Offset(event.x, event.y)
-                
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        // Check if tapping inside existing selection to drag it
-                        if (currentSelection?.bounds?.contains(point) == true) {
-                            isDragging = true
-                            lastDragPoint = point
-                        } else {
-                            // Start new lasso
-                            isDrawingLasso = true
-                            lassoPoints = listOf(point)
-                            onSelectionClear()
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (isDragging && lastDragPoint != null) {
-                            // Move selection
-                            val delta = point - lastDragPoint!!
-                            onSelectionMove(delta)
-                            lastDragPoint = point
-                        } else if (isDrawingLasso) {
-                            lassoPoints = lassoPoints + point
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        if (isDrawingLasso && lassoPoints.size > 3) {
-                            // Complete lasso selection
-                            val selection = performLassoSelection(
-                                lassoPath = lassoPoints,
-                                strokes = strokes,
-                                shapes = shapes
-                            )
-                            onSelectionComplete(selection)
-                        }
-                        
-                        lassoPoints = emptyList()
-                        isDrawingLasso = false
-                        isDragging = false
-                        lastDragPoint = null
-                        true
-                    }
-                    else -> false
-                }
+    // Use rememberUpdatedState to capture latest values for AndroidView callbacks
+    val currentStrokes by rememberUpdatedState(strokes)
+    val currentShapes by rememberUpdatedState(shapes)
+    val currentEnabled by rememberUpdatedState(enabled)
+    val currentSelectionState by rememberUpdatedState(currentSelection)
+    val currentOnSelectionComplete by rememberUpdatedState(onSelectionComplete)
+    val currentOnSelectionMove by rememberUpdatedState(onSelectionMove)
+    val currentOnSelectionClear by rememberUpdatedState(onSelectionClear)
+    
+    Box(modifier = modifier.fillMaxSize()) {
+        // Drawing canvas
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            // Draw current lasso being drawn
+            if (isDrawingLasso && lassoPoints.isNotEmpty()) {
+                drawLassoPath(lassoPoints)
             }
-    ) {
-        // Draw current lasso being drawn
-        if (isDrawingLasso && lassoPoints.isNotEmpty()) {
-            drawLassoPath(lassoPoints)
+            
+            // Draw selection bounds
+            currentSelection?.bounds?.let { bounds ->
+                drawSelectionBounds(bounds)
+            }
         }
         
-        // Draw selection bounds
-        currentSelection?.bounds?.let { bounds ->
-            drawSelectionBounds(bounds)
-        }
+        // Touch interceptor for stylus-only input
+        AndroidView(
+            factory = { context ->
+                object : View(context) {
+                    override fun onTouchEvent(event: MotionEvent): Boolean {
+                        if (!currentEnabled) return false
+                        
+                        val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS ||
+                                       event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                        val isFinger = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                        
+                        // Let finger input pass through for page navigation
+                        if (isFinger) {
+                            return false
+                        }
+                        
+                        // Allow multi-touch for zoom/pan
+                        if (event.pointerCount > 1) {
+                            parent?.requestDisallowInterceptTouchEvent(false)
+                            return false
+                        }
+                        
+                        val point = Offset(event.x, event.y)
+                        
+                        // Prevent parent from intercepting stylus
+                        if (isStylus && event.action == MotionEvent.ACTION_DOWN) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                        
+                        return when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                // Check if tapping inside existing selection to drag it
+                                if (currentSelectionState?.bounds?.contains(point) == true) {
+                                    isDragging = true
+                                    lastDragPoint = point
+                                } else {
+                                    // Start new lasso
+                                    isDrawingLasso = true
+                                    lassoPoints = listOf(point)
+                                    currentOnSelectionClear()
+                                }
+                                true
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                if (isDragging && lastDragPoint != null) {
+                                    val delta = point - lastDragPoint!!
+                                    currentOnSelectionMove(delta)
+                                    lastDragPoint = point
+                                } else if (isDrawingLasso) {
+                                    lassoPoints = lassoPoints + point
+                                }
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                parent?.requestDisallowInterceptTouchEvent(false)
+                                
+                                if (isDrawingLasso && lassoPoints.size > 3) {
+                                    val selection = performLassoSelection(
+                                        lassoPath = lassoPoints,
+                                        strokes = currentStrokes,
+                                        shapes = currentShapes
+                                    )
+                                    currentOnSelectionComplete(selection)
+                                }
+                                
+                                lassoPoints = emptyList()
+                                isDrawingLasso = false
+                                isDragging = false
+                                lastDragPoint = null
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 

@@ -1,10 +1,11 @@
 package com.ospdf.reader.ui.tools
 
 import android.view.MotionEvent
+import android.view.View
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -13,7 +14,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.viewinterop.AndroidView
 import com.ospdf.reader.domain.model.ShapeType
 import com.ospdf.reader.domain.model.ToolState
 import com.ospdf.reader.ui.theme.InkColors
@@ -50,8 +51,8 @@ data class ShapeAnnotation(
 /**
  * Canvas for drawing shapes (line, rectangle, circle, arrow).
  * Supports smart shape detection and snapping.
+ * Uses stylus-only input with finger pass-through for page navigation.
  */
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ShapeCanvas(
     modifier: Modifier = Modifier,
@@ -65,76 +66,109 @@ fun ShapeCanvas(
     var currentPoint by remember { mutableStateOf<Offset?>(null) }
     var isDrawing by remember { mutableStateOf(false) }
     
-    Canvas(
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInteropFilter { event ->
-                if (!enabled) return@pointerInteropFilter false
-                
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        isDrawing = true
-                        startPoint = Offset(event.x, event.y)
-                        currentPoint = Offset(event.x, event.y)
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (isDrawing) {
-                            currentPoint = Offset(event.x, event.y)
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        if (isDrawing && startPoint != null && currentPoint != null) {
-                            val start = startPoint!!
-                            val end = currentPoint!!
-                            
-                            // Apply snapping for straight lines
-                            val snappedEnd = snapToAngle(start, end)
-                            
-                            val shape = ShapeAnnotation(
-                                type = toolState.shapeType,
-                                startX = start.x,
-                                startY = start.y,
-                                endX = snappedEnd.x,
-                                endY = snappedEnd.y,
-                                color = toolState.currentColor,
-                                strokeWidth = toolState.strokeWidth
-                            )
-                            
-                            // Only create if it has some size
-                            if (shape.width > 5 || shape.height > 5) {
-                                onShapeComplete(shape)
-                            }
-                        }
-                        
-                        startPoint = null
-                        currentPoint = null
-                        isDrawing = false
-                        true
-                    }
-                    else -> false
-                }
+    // Use rememberUpdatedState to capture latest values for AndroidView callbacks
+    val currentToolState by rememberUpdatedState(toolState)
+    val currentEnabled by rememberUpdatedState(enabled)
+    val currentOnShapeComplete by rememberUpdatedState(onShapeComplete)
+    
+    Box(modifier = modifier.fillMaxSize()) {
+        // Drawing canvas
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            // Draw existing shapes
+            shapes.forEach { shape ->
+                drawShape(shape)
             }
-    ) {
-        // Draw existing shapes
-        shapes.forEach { shape ->
-            drawShape(shape)
+            
+            // Draw current shape being drawn
+            if (isDrawing && startPoint != null && currentPoint != null) {
+                val previewShape = ShapeAnnotation(
+                    type = toolState.shapeType,
+                    startX = startPoint!!.x,
+                    startY = startPoint!!.y,
+                    endX = snapToAngle(startPoint!!, currentPoint!!).x,
+                    endY = snapToAngle(startPoint!!, currentPoint!!).y,
+                    color = toolState.currentColor,
+                    strokeWidth = toolState.strokeWidth
+                )
+                drawShape(previewShape, isPreview = true)
+            }
         }
         
-        // Draw current shape being drawn
-        if (isDrawing && startPoint != null && currentPoint != null) {
-            val previewShape = ShapeAnnotation(
-                type = toolState.shapeType,
-                startX = startPoint!!.x,
-                startY = startPoint!!.y,
-                endX = snapToAngle(startPoint!!, currentPoint!!).x,
-                endY = snapToAngle(startPoint!!, currentPoint!!).y,
-                color = toolState.currentColor,
-                strokeWidth = toolState.strokeWidth
-            )
-            drawShape(previewShape, isPreview = true)
-        }
+        // Touch interceptor for stylus-only input
+        AndroidView(
+            factory = { context ->
+                object : View(context) {
+                    override fun onTouchEvent(event: MotionEvent): Boolean {
+                        if (!currentEnabled) return false
+                        
+                        val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS ||
+                                       event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                        val isFinger = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                        
+                        // Let finger input pass through for page navigation
+                        if (isFinger) {
+                            return false
+                        }
+                        
+                        // Allow multi-touch for zoom/pan
+                        if (event.pointerCount > 1) {
+                            parent?.requestDisallowInterceptTouchEvent(false)
+                            return false
+                        }
+                        
+                        // Prevent parent from intercepting stylus
+                        if (isStylus && event.action == MotionEvent.ACTION_DOWN) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                        
+                        return when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                isDrawing = true
+                                startPoint = Offset(event.x, event.y)
+                                currentPoint = Offset(event.x, event.y)
+                                true
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                if (isDrawing) {
+                                    currentPoint = Offset(event.x, event.y)
+                                }
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                parent?.requestDisallowInterceptTouchEvent(false)
+                                
+                                if (isDrawing && startPoint != null && currentPoint != null) {
+                                    val start = startPoint!!
+                                    val end = currentPoint!!
+                                    val snappedEnd = snapToAngle(start, end)
+                                    
+                                    val shape = ShapeAnnotation(
+                                        type = currentToolState.shapeType,
+                                        startX = start.x,
+                                        startY = start.y,
+                                        endX = snappedEnd.x,
+                                        endY = snappedEnd.y,
+                                        color = currentToolState.currentColor,
+                                        strokeWidth = currentToolState.strokeWidth
+                                    )
+                                    
+                                    if (shape.width > 5 || shape.height > 5) {
+                                        currentOnShapeComplete(shape)
+                                    }
+                                }
+                                
+                                startPoint = null
+                                currentPoint = null
+                                isDrawing = false
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 
