@@ -341,13 +341,6 @@ class ReaderViewModel @Inject constructor(
     // -------------------- Annotation Methods --------------------
     
     /**
-     * Updates the current zoom level (used to disable annotations when zoomed in).
-     */
-    fun setZoomLevel(zoom: Float) {
-        _uiState.update { it.copy(zoomLevel = zoom) }
-    }
-    
-    /**
      * Sets the current annotation tool.
      */
     fun setTool(tool: AnnotationTool) {

@@ -12,7 +12,6 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import com.ospdf.reader.ui.components.InkStroke
 import com.ospdf.reader.ui.theme.InkColors
@@ -44,9 +43,6 @@ fun LassoSelectionCanvas(
     strokes: List<InkStroke>,
     shapes: List<ShapeAnnotation>,
     enabled: Boolean = true,
-    zoomScale: Float = 1f,
-    zoomOffset: Offset = Offset.Zero,
-    containerSize: IntSize = IntSize.Zero,
     currentSelection: LassoSelection?,
     onSelectionComplete: (LassoSelection) -> Unit,
     onSelectionMove: (Offset) -> Unit,
@@ -65,21 +61,6 @@ fun LassoSelectionCanvas(
     val currentOnSelectionComplete by rememberUpdatedState(onSelectionComplete)
     val currentOnSelectionMove by rememberUpdatedState(onSelectionMove)
     val currentOnSelectionClear by rememberUpdatedState(onSelectionClear)
-    val currentZoomScale by rememberUpdatedState(zoomScale)
-    val currentZoomOffset by rememberUpdatedState(zoomOffset)
-    val currentContainerSize by rememberUpdatedState(containerSize)
-    
-    // Function to transform screen coordinates to content coordinates
-    fun transformPoint(screenX: Float, screenY: Float): Offset {
-        if (currentZoomScale == 1f && currentZoomOffset == Offset.Zero) {
-            return Offset(screenX, screenY)
-        }
-        val centerX = currentContainerSize.width / 2f
-        val centerY = currentContainerSize.height / 2f
-        val contentX = (screenX - centerX - currentZoomOffset.x) / currentZoomScale + centerX
-        val contentY = (screenY - centerY - currentZoomOffset.y) / currentZoomScale + centerY
-        return Offset(contentX, contentY)
-    }
     
     Box(modifier = modifier.fillMaxSize()) {
         // Drawing canvas
@@ -104,17 +85,23 @@ fun LassoSelectionCanvas(
                         
                         val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS ||
                                        event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                        val isFinger = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
                         
-                        // Let Compose handle all finger gestures (zoom, pan, double-tap)
-                        if (!isStylus) return false
+                        // Let finger input pass through for page navigation
+                        if (isFinger) {
+                            return false
+                        }
                         
-                        // When zoomed in, disable lasso - let user zoom out first
-                        if (currentZoomScale > 1.05f) return false
+                        // Allow multi-touch for zoom/pan
+                        if (event.pointerCount > 1) {
+                            parent?.requestDisallowInterceptTouchEvent(false)
+                            return false
+                        }
                         
-                        val point = transformPoint(event.x, event.y)
+                        val point = Offset(event.x, event.y)
                         
                         // Prevent parent from intercepting stylus
-                        if (event.action == MotionEvent.ACTION_DOWN) {
+                        if (isStylus && event.action == MotionEvent.ACTION_DOWN) {
                             parent?.requestDisallowInterceptTouchEvent(true)
                         }
                         

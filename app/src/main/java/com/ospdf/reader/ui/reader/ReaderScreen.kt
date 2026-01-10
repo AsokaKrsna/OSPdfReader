@@ -2,7 +2,6 @@ package com.ospdf.reader.ui.reader
 
 import android.graphics.Bitmap
 import android.net.Uri
-import android.view.MotionEvent
 import androidx.compose.animation.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -25,8 +24,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -237,7 +234,6 @@ fun ReaderScreen(
                             toolState = uiState.toolState,
                             canUndo = uiState.canUndo,
                             canRedo = uiState.canRedo,
-                            isZoomedIn = uiState.zoomLevel > 1.05f,
                             onToolSelected = { viewModel.setTool(it) },
                             onColorSelected = { viewModel.setColor(it) },
                             onStrokeWidthChanged = { viewModel.setStrokeWidth(it) },
@@ -278,7 +274,6 @@ fun ReaderScreen(
 
 /**
  * PDF page view with integrated inking canvas for annotations.
- * Supports pinch-to-zoom and pan when zoomed in.
  */
 @Composable
 private fun PdfPageWithAnnotations(
@@ -302,21 +297,6 @@ private fun PdfPageWithAnnotations(
     
     // Container size for pan limits
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    
-    // Zoom and pan state
-    var scale by remember { mutableStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    
-    // Sync zoom level to ViewModel for toolbar state
-    LaunchedEffect(scale) {
-        viewModel.setZoomLevel(scale)
-    }
-    
-    // Reset zoom when page changes
-    LaunchedEffect(pageIndex) {
-        scale = 1f
-        offset = Offset.Zero
-    }
     
     // Calculate image layout for correct text snapping
     val imageLayout by remember(bitmap, containerSize) {
@@ -391,93 +371,24 @@ private fun PdfPageWithAnnotations(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { containerSize = it }
-            // Always enable zoom gestures - they work in both reading and annotation mode
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onDoubleTap = { tapOffset ->
-                        // Double-tap to toggle zoom
-                        if (scale > 1.1f) {
-                            scale = 1f
-                            offset = Offset.Zero
-                        } else {
-                            scale = 2.5f
-                            val centerX = containerSize.width / 2f
-                            val centerY = containerSize.height / 2f
-                            offset = Offset(
-                                (centerX - tapOffset.x) * (scale - 1),
-                                (centerY - tapOffset.y) * (scale - 1)
+            .then(
+                // Tap gestures when not in annotation mode
+                if (toolState.currentTool == AnnotationTool.NONE) {
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { onTap() }
                             )
                         }
-                    },
-                    onTap = { onTap() }
-                )
-            }
-            .pointerInput(Unit) {
-                // Only handle pinch-to-zoom (2+ fingers), let single-finger swipes pass to pager
-                awaitEachGesture {
-                    var zoom = 1f
-                    var pastTouchSlop = false
-                    val touchSlop = viewConfiguration.touchSlop
-                    
-                    // Wait for first pointer down
-                    awaitFirstDown(requireUnconsumed = false)
-                    
-                    do {
-                        val event = awaitPointerEvent()
-                        val pointerCount = event.changes.count { it.pressed }
-                        
-                        // Only handle multi-touch (pinch gestures)
-                        if (pointerCount >= 2) {
-                            val zoomChange = event.calculateZoom()
-                            val panChange = event.calculatePan()
-                            val centroid = event.calculateCentroid()
-                            
-                            if (!pastTouchSlop) {
-                                zoom *= zoomChange
-                                if (kotlin.math.abs(zoom - 1f) > touchSlop / 100f) {
-                                    pastTouchSlop = true
-                                }
-                            }
-                            
-                            if (pastTouchSlop) {
-                                val newScale = (scale * zoomChange).coerceIn(1f, 5f)
-                                val oldScale = scale
-                                scale = newScale
-                                
-                                val centroidOffset = centroid - Offset(containerSize.width / 2f, containerSize.height / 2f)
-                                offset = offset * (newScale / oldScale) + centroidOffset * (1 - newScale / oldScale)
-                                
-                                // Only pan when zoomed in
-                                if (scale > 1f) {
-                                    offset += panChange
-                                }
-                                
-                                val maxOffsetX = (containerSize.width * (scale - 1)) / 2
-                                val maxOffsetY = (containerSize.height * (scale - 1)) / 2
-                                offset = Offset(
-                                    offset.x.coerceIn(-maxOffsetX, maxOffsetX),
-                                    offset.y.coerceIn(-maxOffsetY, maxOffsetY)
-                                )
-                                
-                                // Consume the event to prevent pager from intercepting
-                                event.changes.forEach { it.consume() }
-                            }
-                        }
-                        // Single finger: don't consume, let pager handle swipes
-                    } while (event.changes.any { it.pressed })
+                } else {
+                    Modifier
                 }
-            },
+            ),
         contentAlignment = Alignment.Center
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
-                }
         ) {
             // PDF page bitmap
             bitmap?.let { bmp ->
@@ -535,23 +446,20 @@ private fun PdfPageWithAnnotations(
                         toolState = toolState,
                         textLines = scaledTextLines,
                         enabled = true,
-                        zoomScale = scale,
-                        zoomOffset = offset,
-                        containerSize = containerSize,
                         onStrokeStart = { /* Optional: haptic feedback */ },
                         onStrokeEnd = { stroke ->
                             // Convert the drawn stroke from screen space to PDF page space so saved annotations align.
-                            val mappingScale = fitScale * renderScale
+                            val scale = fitScale * renderScale
                             val mapped = stroke.copy(
                                 points = stroke.points.map { pt ->
                                     com.ospdf.reader.domain.model.StrokePoint(
-                                        x = (pt.x - imageLeft) / mappingScale,
-                                        y = (pt.y - imageTop) / mappingScale,
+                                        x = (pt.x - imageLeft) / scale,
+                                        y = (pt.y - imageTop) / scale,
                                         pressure = pt.pressure,
                                         timestamp = pt.timestamp
                                     )
                                 },
-                                strokeWidth = stroke.strokeWidth / mappingScale
+                                strokeWidth = stroke.strokeWidth / scale
                             )
                             viewModel.addStroke(mapped)
                         },
@@ -565,17 +473,14 @@ private fun PdfPageWithAnnotations(
                         shapes = emptyList(), // Shapes already rendered above; this handles input only
                         toolState = toolState,
                         enabled = true,
-                        zoomScale = scale,
-                        zoomOffset = offset,
-                        containerSize = containerSize,
                         onShapeComplete = { shape ->
-                            val mappingScale = fitScale * renderScale
+                            val scale = fitScale * renderScale
                             val mapped = shape.copy(
-                                startX = (shape.startX - imageLeft) / mappingScale,
-                                startY = (shape.startY - imageTop) / mappingScale,
-                                endX = (shape.endX - imageLeft) / mappingScale,
-                                endY = (shape.endY - imageTop) / mappingScale,
-                                strokeWidth = shape.strokeWidth / mappingScale,
+                                startX = (shape.startX - imageLeft) / scale,
+                                startY = (shape.startY - imageTop) / scale,
+                                endX = (shape.endX - imageLeft) / scale,
+                                endY = (shape.endY - imageTop) / scale,
+                                strokeWidth = shape.strokeWidth / scale,
                                 pageNumber = pageIndex
                             )
                             viewModel.addShape(mapped)
@@ -588,16 +493,13 @@ private fun PdfPageWithAnnotations(
                         strokes = screenStrokes,
                         shapes = screenShapes,
                         enabled = true,
-                        zoomScale = scale,
-                        zoomOffset = offset,
-                        containerSize = containerSize,
                         currentSelection = currentSelection,
                         onSelectionComplete = { selection -> viewModel.setLassoSelection(selection) },
                         onSelectionMove = { screenDelta ->
                             // Convert screen delta to page-space delta
-                            val mappingScale = fitScale * renderScale
-                            val pageDeltaX = screenDelta.x / mappingScale
-                            val pageDeltaY = screenDelta.y / mappingScale
+                            val scale = fitScale * renderScale
+                            val pageDeltaX = screenDelta.x / scale
+                            val pageDeltaY = screenDelta.y / scale
                             viewModel.moveSelection(pageDeltaX, pageDeltaY, screenDelta.x, screenDelta.y)
                         },
                         onSelectionClear = { viewModel.setLassoSelection(null) }
