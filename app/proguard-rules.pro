@@ -16,9 +16,9 @@
 -keep class com.google.api.** { *; }
 -keep class com.google.auth.** { *; }
 
-# Keep Tesseract classes
--keep class com.googlecode.tesseract.** { *; }
--keep class org.bytedeco.** { *; }
+# Keep Tesseract4Android classes
+-keep class com.googlecode.tesseract.android.** { *; }
+-keep class cz.adaptech.tesseract4android.** { *; }
 
 # Coroutines
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}

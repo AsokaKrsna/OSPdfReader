@@ -39,7 +39,7 @@ fun AppNavigation(
     intent: Intent?
 ) {
     // Handle PDF file opened from external app
-    LaunchedEffect(intent) {
+    LaunchedEffect(intent?.data?.toString()) {
         intent?.data?.let { uri ->
             navController.navigate(Routes.reader(uri.toString())) {
                 popUpTo(Routes.FILE_BROWSER) { inclusive = false }

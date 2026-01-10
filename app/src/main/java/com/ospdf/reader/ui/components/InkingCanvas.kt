@@ -16,7 +16,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.ospdf.reader.domain.model.AnnotationTool
 import com.ospdf.reader.domain.model.StrokePoint
 import com.ospdf.reader.domain.model.ToolState
+import com.ospdf.reader.data.pdf.TextLine
 import kotlin.math.abs
+
+// ==================== Data Classes ====================
 
 /**
  * Represents a complete stroke with all its properties.
@@ -56,6 +59,161 @@ data class InkStroke(
         
         return path
     }
+}
+
+/**
+ * Result of snapping a highlighter stroke to a text line.
+ */
+private data class HighlighterSnapResult(
+    val points: List<StrokePoint>,
+    val strokeWidth: Float
+)
+
+// ==================== Helper Functions ====================
+
+/**
+ * Checks if the tool is a drawing tool (pen or highlighter).
+ */
+private fun AnnotationTool.isDrawingTool(): Boolean = when (this) {
+    AnnotationTool.PEN, AnnotationTool.PEN_2,
+    AnnotationTool.HIGHLIGHTER, AnnotationTool.HIGHLIGHTER_2 -> true
+    else -> false
+}
+
+/**
+ * Checks if the tool is a highlighter variant.
+ */
+private fun AnnotationTool.isHighlighter(): Boolean = when (this) {
+    AnnotationTool.HIGHLIGHTER, AnnotationTool.HIGHLIGHTER_2 -> true
+    else -> false
+}
+
+/**
+ * Checks if the tool is the smart highlighter that snaps to text.
+ */
+private fun AnnotationTool.isSmartHighlighter(): Boolean = this == AnnotationTool.HIGHLIGHTER_2
+
+/**
+ * Finds the nearest text line to a given Y position.
+ * Returns null if no line is within snapping distance.
+ */
+private fun findNearestTextLine(
+    y: Float,
+    textLines: List<TextLine>
+): TextLine? {
+    return textLines.minByOrNull { line ->
+        val lineCenter = line.y + line.height / 2
+        abs(lineCenter - y)
+    }?.takeIf { line ->
+        y >= line.y - line.height && y <= line.y + line.height * 2
+    }
+}
+
+/**
+ * Snaps a highlighter stroke to the nearest text line if available.
+ * Returns adjusted points and stroke width for text-aligned highlighting.
+ */
+private fun snapHighlighterToTextLine(
+    points: List<StrokePoint>,
+    textLines: List<TextLine>,
+    defaultWidth: Float
+): HighlighterSnapResult {
+    if (points.size < 2) {
+        return HighlighterSnapResult(points, defaultWidth)
+    }
+    
+    val startX = points.first().x
+    val endX = points.last().x
+    val avgY = (points.first().y + points.last().y) / 2
+    
+    val nearestLine = findNearestTextLine(avgY, textLines)
+    
+    return if (nearestLine != null) {
+        val lineY = nearestLine.y + nearestLine.height / 2
+        HighlighterSnapResult(
+            points = listOf(
+                StrokePoint(x = startX, y = lineY, pressure = 1f),
+                StrokePoint(x = endX, y = lineY, pressure = 1f)
+            ),
+            strokeWidth = nearestLine.height * 0.9f
+        )
+    } else {
+        val straightY = points.first().y
+        HighlighterSnapResult(
+            points = listOf(
+                StrokePoint(x = startX, y = straightY, pressure = 1f),
+                StrokePoint(x = endX, y = straightY, pressure = 1f)
+            ),
+            strokeWidth = defaultWidth
+        )
+    }
+}
+
+/**
+ * Creates a StrokePoint from a MotionEvent at the current position.
+ */
+private fun createStrokePoint(event: MotionEvent): StrokePoint {
+    return StrokePoint(
+        x = event.x,
+        y = event.y,
+        pressure = 1f,
+        timestamp = System.currentTimeMillis()
+    )
+}
+
+/**
+ * Creates a StrokePoint from historical event data.
+ */
+private fun createHistoricalPoint(event: MotionEvent, historyIndex: Int): StrokePoint {
+    return StrokePoint(
+        x = event.getHistoricalX(historyIndex),
+        y = event.getHistoricalY(historyIndex),
+        pressure = 1f,
+        timestamp = event.getHistoricalEventTime(historyIndex)
+    )
+}
+
+/**
+ * Extracts all points from a move event, including historical points for smooth curves.
+ */
+private fun extractMovePoints(event: MotionEvent): List<StrokePoint> {
+    val points = mutableListOf<StrokePoint>()
+    
+    // Add historical points for smoother curves
+    for (i in 0 until event.historySize) {
+        points.add(createHistoricalPoint(event, i))
+    }
+    
+    // Add current point
+    points.add(createStrokePoint(event))
+    
+    return points
+}
+
+/**
+ * Creates a finalized InkStroke from drawing state.
+ */
+private fun createFinalStroke(
+    points: List<StrokePoint>,
+    tool: AnnotationTool,
+    toolState: ToolState,
+    textLines: List<TextLine>
+): InkStroke {
+    val isHighlighterTool = tool.isHighlighter()
+    
+    val (finalPoints, finalWidth) = if (tool.isSmartHighlighter()) {
+        val result = snapHighlighterToTextLine(points, textLines, toolState.strokeWidth)
+        result.points to result.strokeWidth
+    } else {
+        points to toolState.strokeWidth
+    }
+    
+    return InkStroke(
+        points = finalPoints,
+        color = toolState.currentColor,
+        strokeWidth = finalWidth,
+        isHighlighter = isHighlighterTool
+    )
 }
 
 /**
@@ -103,230 +261,223 @@ fun InkingCanvas(
                 drawStroke(stroke)
             }
             
-            // Draw current active stroke
-            if (currentPoints.isNotEmpty() && 
-                (toolState.currentTool == AnnotationTool.PEN || 
-                 toolState.currentTool == AnnotationTool.PEN_2 ||
-                 toolState.currentTool == AnnotationTool.HIGHLIGHTER ||
-                 toolState.currentTool == AnnotationTool.HIGHLIGHTER_2)) {
-                
-                val isHighlighterTool = toolState.currentTool == AnnotationTool.HIGHLIGHTER ||
-                                       toolState.currentTool == AnnotationTool.HIGHLIGHTER_2
-                
-                // HIGHLIGHTER_2: show straight line preview snapped to text line
-                val previewPoints: List<StrokePoint>
-                val previewWidth: Float
-                
-                if (toolState.currentTool == AnnotationTool.HIGHLIGHTER_2 && currentPoints.size > 1) {
-                    val startX = currentPoints.first().x
-                    val endX = currentPoints.last().x
-                    val avgY = (currentPoints.first().y + currentPoints.last().y) / 2
-                    
-                    val nearestLine = textLines.minByOrNull { line ->
-                        val lineCenter = line.y + line.height / 2
-                        abs(lineCenter - avgY)
-                    }?.takeIf { line ->
-                        avgY >= line.y - line.height && avgY <= line.y + line.height * 2
-                    }
-                    
-                    if (nearestLine != null) {
-                        val lineY = nearestLine.y + nearestLine.height / 2
-                        previewPoints = listOf(
-                            StrokePoint(x = startX, y = lineY, pressure = 1f),
-                            StrokePoint(x = endX, y = lineY, pressure = 1f)
-                        )
-                        previewWidth = nearestLine.height * 0.9f
-                    } else {
-                        val straightY = currentPoints.first().y
-                        previewPoints = listOf(
-                            StrokePoint(x = startX, y = straightY, pressure = 1f),
-                            StrokePoint(x = endX, y = straightY, pressure = 1f)
-                        )
-                        previewWidth = toolState.strokeWidth
-                    }
-                } else {
-                    previewPoints = currentPoints
-                    previewWidth = toolState.strokeWidth
-                }
-                
-                val activeStroke = InkStroke(
-                    points = previewPoints,
-                    color = toolState.currentColor,
-                    strokeWidth = previewWidth,
-                    isHighlighter = isHighlighterTool
+            // Draw current active stroke preview
+            if (currentPoints.isNotEmpty() && toolState.currentTool.isDrawingTool()) {
+                val previewStroke = createPreviewStroke(
+                    points = currentPoints,
+                    tool = toolState.currentTool,
+                    toolState = toolState,
+                    textLines = textLines
                 )
-                drawStroke(activeStroke)
+                drawStroke(previewStroke)
             }
         }
         
         // Invisible touch interceptor using AndroidView for proper parent touch interception control
         AndroidView(
             factory = { context ->
-                object : View(context) {
-                    override fun onTouchEvent(event: MotionEvent): Boolean {
-                        if (!currentEnabled) return false
-                        
-                        val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS ||
-                                       event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
-                        val isFinger = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
-                        
-                        // In NONE mode, let everything pass through
-                        if (currentToolState.currentTool == AnnotationTool.NONE) {
-                            if (event.action == MotionEvent.ACTION_UP) {
-                                val now = System.currentTimeMillis()
-                                if (now - lastTapTime < 300) {
-                                    currentOnTap()
-                                }
-                                lastTapTime = now
-                            }
-                            return false
-                        }
-                        
-                        // STYLUS ONLY DRAWING: Let finger input pass through for page navigation
-                        if (isFinger) {
-                            return false
-                        }
-                        
-                        // Allow multi-touch for zoom/pan
-                        if (event.pointerCount > 1) {
-                            parent?.requestDisallowInterceptTouchEvent(false)
-                            return false
-                        }
-                        
-                        // For stylus input, prevent parent from intercepting
-                        if (isStylus && event.action == MotionEvent.ACTION_DOWN) {
-                            parent?.requestDisallowInterceptTouchEvent(true)
-                        }
-                        
-                        return when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                isDrawing = true
-                                currentOnStylusActiveChange(true)
-                                currentOnStrokeStart()
-                                
-                                val point = StrokePoint(
-                                    x = event.x,
-                                    y = event.y,
-                                    pressure = 1f,
-                                    timestamp = System.currentTimeMillis()
-                                )
-                                currentPoints = listOf(point)
-                                
-                                // For eraser, check if we hit any stroke
-                                if (currentToolState.currentTool == AnnotationTool.ERASER) {
-                                    checkEraserHit(event.x, event.y, currentStrokes, currentOnStrokeErase)
-                                }
-                                
-                                true
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                if (isDrawing) {
-                                    val newPoints = mutableListOf<StrokePoint>()
-                                    
-                                    // Handle historical events for smoother curves
-                                    for (i in 0 until event.historySize) {
-                                        newPoints.add(
-                                            StrokePoint(
-                                                x = event.getHistoricalX(i),
-                                                y = event.getHistoricalY(i),
-                                                pressure = 1f,
-                                                timestamp = event.getHistoricalEventTime(i)
-                                            )
-                                        )
-                                    }
-                                    
-                                    newPoints.add(
-                                        StrokePoint(
-                                            x = event.x,
-                                            y = event.y,
-                                            pressure = 1f,
-                                            timestamp = System.currentTimeMillis()
-                                        )
-                                    )
-                                    
-                                    currentPoints = currentPoints + newPoints
-                                    
-                                    // For eraser, continuously check hits
-                                    if (currentToolState.currentTool == AnnotationTool.ERASER) {
-                                        for (point in newPoints) {
-                                            checkEraserHit(point.x, point.y, currentStrokes, currentOnStrokeErase)
-                                        }
-                                    }
-                                }
-                                true
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                parent?.requestDisallowInterceptTouchEvent(false)
-                                currentOnStylusActiveChange(false)
-                                
-                                if (isDrawing && currentPoints.isNotEmpty()) {
-                                    val tool = currentToolState.currentTool
-                                    if (tool == AnnotationTool.PEN ||
-                                        tool == AnnotationTool.PEN_2 ||
-                                        tool == AnnotationTool.HIGHLIGHTER ||
-                                        tool == AnnotationTool.HIGHLIGHTER_2) {
-                                        
-                                        val isHighlighterTool = tool == AnnotationTool.HIGHLIGHTER ||
-                                                               tool == AnnotationTool.HIGHLIGHTER_2
-                                        
-                                        val finalPoints: List<StrokePoint>
-                                        val finalWidth: Float
-                                        
-                                        if (tool == AnnotationTool.HIGHLIGHTER_2 && currentPoints.size > 1) {
-                                            val startX = currentPoints.first().x
-                                            val endX = currentPoints.last().x
-                                            val avgY = (currentPoints.first().y + currentPoints.last().y) / 2
-                                            
-                                            val nearestLine = currentTextLines.minByOrNull { line ->
-                                                val lineCenter = line.y + line.height / 2
-                                                abs(lineCenter - avgY)
-                                            }?.takeIf { line ->
-                                                avgY >= line.y - line.height && avgY <= line.y + line.height * 2
-                                            }
-                                            
-                                            if (nearestLine != null) {
-                                                val lineY = nearestLine.y + nearestLine.height / 2
-                                                finalPoints = listOf(
-                                                    StrokePoint(x = startX, y = lineY, pressure = 1f),
-                                                    StrokePoint(x = endX, y = lineY, pressure = 1f)
-                                                )
-                                                finalWidth = nearestLine.height * 0.9f
-                                            } else {
-                                                val straightY = currentPoints.first().y
-                                                finalPoints = listOf(
-                                                    StrokePoint(x = startX, y = straightY, pressure = 1f),
-                                                    StrokePoint(x = endX, y = straightY, pressure = 1f)
-                                                )
-                                                finalWidth = currentToolState.strokeWidth
-                                            }
-                                        } else {
-                                            finalPoints = currentPoints
-                                            finalWidth = currentToolState.strokeWidth
-                                        }
-                                        
-                                        val stroke = InkStroke(
-                                            points = finalPoints,
-                                            color = currentToolState.currentColor,
-                                            strokeWidth = finalWidth,
-                                            isHighlighter = isHighlighterTool
-                                        )
-                                        currentOnStrokeEnd(stroke)
-                                    }
-                                }
-                                
-                                currentPoints = emptyList()
-                                isDrawing = false
-                                true
-                            }
-                            else -> false
-                        }
-                    }
-                }
+                InkingTouchHandler(
+                    context = context,
+                    isEnabled = { currentEnabled },
+                    toolState = { currentToolState },
+                    strokes = { currentStrokes },
+                    textLines = { currentTextLines },
+                    isDrawing = { isDrawing },
+                    setDrawing = { isDrawing = it },
+                    currentPoints = { currentPoints },
+                    setCurrentPoints = { currentPoints = it },
+                    lastTapTime = { lastTapTime },
+                    setLastTapTime = { lastTapTime = it },
+                    onStrokeStart = { currentOnStrokeStart() },
+                    onStrokeEnd = { currentOnStrokeEnd(it) },
+                    onStrokeErase = { currentOnStrokeErase(it) },
+                    onTap = { currentOnTap() },
+                    onStylusActiveChange = { currentOnStylusActiveChange(it) }
+                )
             },
             modifier = Modifier.fillMaxSize()
         )
     }
 }
+
+/**
+ * Creates a preview stroke for the current drawing, with smart highlighter snapping.
+ */
+private fun createPreviewStroke(
+    points: List<StrokePoint>,
+    tool: AnnotationTool,
+    toolState: ToolState,
+    textLines: List<TextLine>
+): InkStroke {
+    val isHighlighterTool = tool.isHighlighter()
+    
+    val (previewPoints, previewWidth) = if (tool.isSmartHighlighter() && points.size > 1) {
+        val result = snapHighlighterToTextLine(points, textLines, toolState.strokeWidth)
+        result.points to result.strokeWidth
+    } else {
+        points to toolState.strokeWidth
+    }
+    
+    return InkStroke(
+        points = previewPoints,
+        color = toolState.currentColor,
+        strokeWidth = previewWidth,
+        isHighlighter = isHighlighterTool
+    )
+}
+
+// ==================== Touch Handler ====================
+
+/**
+ * Custom View that handles touch events for inking.
+ * Extracted from the inline object to reduce complexity and improve testability.
+ */
+private class InkingTouchHandler(
+    context: android.content.Context,
+    private val isEnabled: () -> Boolean,
+    private val toolState: () -> ToolState,
+    private val strokes: () -> List<InkStroke>,
+    private val textLines: () -> List<TextLine>,
+    private val isDrawing: () -> Boolean,
+    private val setDrawing: (Boolean) -> Unit,
+    private val currentPoints: () -> List<StrokePoint>,
+    private val setCurrentPoints: (List<StrokePoint>) -> Unit,
+    private val lastTapTime: () -> Long,
+    private val setLastTapTime: (Long) -> Unit,
+    private val onStrokeStart: () -> Unit,
+    private val onStrokeEnd: (InkStroke) -> Unit,
+    private val onStrokeErase: (String) -> Unit,
+    private val onTap: () -> Unit,
+    private val onStylusActiveChange: (Boolean) -> Unit
+) : View(context) {
+    
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!isEnabled()) return false
+        
+        val inputType = classifyInputType(event)
+        
+        // Handle pass-through cases first
+        if (shouldPassThrough(inputType, event)) {
+            return false
+        }
+        
+        // Configure parent interception for stylus
+        configureParentInterception(event, inputType)
+        
+        // Dispatch to appropriate handler
+        return when (event.action) {
+            MotionEvent.ACTION_DOWN -> handleActionDown(event)
+            MotionEvent.ACTION_MOVE -> handleActionMove(event)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> handleActionUp()
+            else -> false
+        }
+    }
+    
+    private fun classifyInputType(event: MotionEvent): InputType {
+        return when (event.getToolType(0)) {
+            MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_ERASER -> InputType.STYLUS
+            MotionEvent.TOOL_TYPE_FINGER -> InputType.FINGER
+            else -> InputType.OTHER
+        }
+    }
+    
+    private fun shouldPassThrough(inputType: InputType, event: MotionEvent): Boolean {
+        // In NONE mode, handle tap detection but pass through
+        if (toolState().currentTool == AnnotationTool.NONE) {
+            handleTapDetection(event)
+            return true
+        }
+        
+        // Let finger input pass through for page navigation
+        if (inputType == InputType.FINGER) {
+            return true
+        }
+        
+        // Allow multi-touch for zoom/pan
+        if (event.pointerCount > 1) {
+            parent?.requestDisallowInterceptTouchEvent(false)
+            return true
+        }
+        
+        return false
+    }
+    
+    private fun handleTapDetection(event: MotionEvent) {
+        if (event.action == MotionEvent.ACTION_UP) {
+            val now = System.currentTimeMillis()
+            if (now - lastTapTime() < 300) {
+                onTap()
+            }
+            setLastTapTime(now)
+        }
+    }
+    
+    private fun configureParentInterception(event: MotionEvent, inputType: InputType) {
+        if (inputType == InputType.STYLUS && event.action == MotionEvent.ACTION_DOWN) {
+            parent?.requestDisallowInterceptTouchEvent(true)
+        }
+    }
+    
+    private fun handleActionDown(event: MotionEvent): Boolean {
+        setDrawing(true)
+        onStylusActiveChange(true)
+        onStrokeStart()
+        
+        val point = createStrokePoint(event)
+        setCurrentPoints(listOf(point))
+        
+        // For eraser, check if we hit any stroke
+        if (toolState().currentTool == AnnotationTool.ERASER) {
+            checkEraserHit(event.x, event.y, strokes(), onStrokeErase)
+        }
+        
+        return true
+    }
+    
+    private fun handleActionMove(event: MotionEvent): Boolean {
+        if (!isDrawing()) return true
+        
+        val newPoints = extractMovePoints(event)
+        setCurrentPoints(currentPoints() + newPoints)
+        
+        // For eraser, continuously check hits
+        if (toolState().currentTool == AnnotationTool.ERASER) {
+            newPoints.forEach { point ->
+                checkEraserHit(point.x, point.y, strokes(), onStrokeErase)
+            }
+        }
+        
+        return true
+    }
+    
+    private fun handleActionUp(): Boolean {
+        parent?.requestDisallowInterceptTouchEvent(false)
+        onStylusActiveChange(false)
+        
+        if (isDrawing() && currentPoints().isNotEmpty()) {
+            val tool = toolState().currentTool
+            if (tool.isDrawingTool()) {
+                val stroke = createFinalStroke(
+                    points = currentPoints(),
+                    tool = tool,
+                    toolState = toolState(),
+                    textLines = textLines()
+                )
+                onStrokeEnd(stroke)
+            }
+        }
+        
+        setCurrentPoints(emptyList())
+        setDrawing(false)
+        return true
+    }
+    
+    private enum class InputType {
+        STYLUS, FINGER, OTHER
+    }
+}
+
+// ==================== Drawing Functions ====================
 
 /**
  * Draws a stroke on the canvas with appropriate styling.

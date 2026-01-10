@@ -36,8 +36,13 @@ class BitmapCache @Inject constructor() {
         }
     }
     
-    // Secondary soft reference cache for recently evicted bitmaps
-    private val softCache = mutableMapOf<String, SoftReference<Bitmap>>()
+    // Secondary soft reference cache for recently evicted bitmaps (bounded to prevent unbounded growth)
+    private val maxSoftCacheSize = 20
+    private val softCache = object : LinkedHashMap<String, SoftReference<Bitmap>>(maxSoftCacheSize, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SoftReference<Bitmap>>?): Boolean {
+            return size > maxSoftCacheSize
+        }
+    }
     
     /**
      * Gets a cached bitmap or null if not found.

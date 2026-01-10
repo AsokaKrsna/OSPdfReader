@@ -18,7 +18,6 @@
     
     <!-- Foreground service for long operations -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     
     <!-- Stylus/Pen feature (optional) -->
     <uses-feature

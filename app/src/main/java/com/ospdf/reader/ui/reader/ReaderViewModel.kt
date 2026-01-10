@@ -23,6 +23,7 @@ import com.ospdf.reader.ui.tools.LassoSelection
 import com.ospdf.reader.ui.theme.InkColors
 import com.ospdf.reader.data.local.RecentDocumentsRepository
 import com.ospdf.reader.data.local.AnnotationRepository
+import com.ospdf.reader.util.BitmapCache
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -65,7 +66,8 @@ class ReaderViewModel @Inject constructor(
     private val recentDocumentsRepository: RecentDocumentsRepository,
     private val googleDriveSync: GoogleDriveSync,
     private val preferencesManager: PreferencesManager,
-    private val annotationRepository: AnnotationRepository
+    private val annotationRepository: AnnotationRepository,
+    private val bitmapCache: BitmapCache
 ) : ViewModel() {
 
     // Render scale used for MuPDF bitmap generation (applied as DPI multiplier).
@@ -74,8 +76,7 @@ class ReaderViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
     
-    // Cache for rendered page bitmaps
-    private val pageCache = mutableMapOf<Int, Bitmap>()
+    // Page bitmap flows for UI observation
     private val pageBitmapFlows = mutableMapOf<Int, MutableStateFlow<Bitmap?>>()
     
     // Annotation storage - per page
@@ -275,13 +276,15 @@ class ReaderViewModel @Inject constructor(
      * Renders a page and caches the result.
      */
     private suspend fun renderPage(pageIndex: Int): Bitmap? {
+        val cacheKey = bitmapCache.pageKey(currentDocumentPath, pageIndex, renderScale)
+        
         // Return cached if available
-        pageCache[pageIndex]?.let { return it }
+        bitmapCache.get(cacheKey)?.let { return it }
         
         return withContext(Dispatchers.IO) {
             pdfRenderer.renderPage(pageIndex, renderScale)?.also { bitmap ->
                 // Cache the bitmap
-                pageCache[pageIndex] = bitmap
+                bitmapCache.put(cacheKey, bitmap)
                 
                 // Update the flow
                 pageBitmapFlows[pageIndex]?.value = bitmap
@@ -295,7 +298,8 @@ class ReaderViewModel @Inject constructor(
     private fun preRenderPages(startPage: Int, count: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             for (i in startPage until minOf(startPage + count, _uiState.value.pageCount)) {
-                if (!pageCache.containsKey(i)) {
+                val cacheKey = bitmapCache.pageKey(currentDocumentPath, i, renderScale)
+                if (bitmapCache.get(cacheKey) == null) {
                     renderPage(i)
                 }
             }
@@ -317,7 +321,8 @@ class ReaderViewModel @Inject constructor(
             ).filter { it >= 0 && it < _uiState.value.pageCount }
             
             pagesToRender.forEach { page ->
-                if (!pageCache.containsKey(page)) {
+                val cacheKey = bitmapCache.pageKey(currentDocumentPath, page, renderScale)
+                if (bitmapCache.get(cacheKey) == null) {
                     renderPage(page)
                 }
             }
@@ -826,10 +831,7 @@ class ReaderViewModel @Inject constructor(
                     }
                     
                     // Clear page cache and reset bitmap flows
-                    pageCache.values.forEach { bitmap ->
-                        try { bitmap.recycle() } catch (_: Exception) {}
-                    }
-                    pageCache.clear()
+                    bitmapCache.clear()
                     pageBitmapFlows.forEach { (_, flow) -> flow.value = null }
                     
                     // Reopen the document
@@ -868,7 +870,9 @@ class ReaderViewModel @Inject constructor(
                     // Save failed - try to reopen document
                     try {
                         pdfRenderer.reopenDocument(uri)
-                    } catch (_: Exception) {}
+                    } catch (reopenEx: Exception) {
+                        android.util.Log.e("ReaderViewModel", "Failed to reopen document after save failure", reopenEx)
+                    }
                     
                     _uiState.update { 
                         it.copy(
@@ -883,7 +887,9 @@ class ReaderViewModel @Inject constructor(
                 // Try to reopen document on exception
                 try {
                     pdfRenderer.reopenDocument(uri)
-                } catch (_: Exception) {}
+                } catch (reopenEx: Exception) {
+                    android.util.Log.e("ReaderViewModel", "Failed to reopen document after exception", reopenEx)
+                }
                 
                 _uiState.update { 
                     it.copy(
@@ -897,9 +903,8 @@ class ReaderViewModel @Inject constructor(
     
     override fun onCleared() {
         super.onCleared()
-        // Clear cached bitmaps
-        pageCache.values.forEach { it.recycle() }
-        pageCache.clear()
+        // Clear cached bitmaps (BitmapCache is singleton, clearing here removes this document's pages)
+        bitmapCache.clear()
         
         // Close the document
         viewModelScope.launch {
