@@ -1,5 +1,6 @@
 package com.ospdf.reader.ui.reader
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.ui.graphics.Color
@@ -25,6 +26,7 @@ import com.ospdf.reader.data.local.RecentDocumentsRepository
 import com.ospdf.reader.data.local.AnnotationRepository
 import com.ospdf.reader.util.BitmapCache
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -61,6 +63,7 @@ data class ReaderUiState(
  */
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val pdfRenderer: MuPdfRenderer,
     private val annotationManager: AnnotationManager,
     private val recentDocumentsRepository: RecentDocumentsRepository,
@@ -801,15 +804,20 @@ class ReaderViewModel @Inject constructor(
                     pdfRenderer.closeDocument()
                 }
                 
-                // Save annotations directly to the original file
+                // Save annotations directly to the original file with baking
+                // bakeAnnotations = true burns annotations into page content (uneditable)
                 val saveResult = annotationManager.saveAnnotationsToOriginalFile(
                     originalUri = uri,
                     sourcePath = savedDocumentPath,
                     strokes = strokesMap,
-                    shapes = shapesMap
+                    shapes = shapesMap,
+                    bakeAnnotations = true
                 )
                 
                 if (saveResult.isSuccess) {
+                    val outputPath = saveResult.getOrNull()!!
+                    val savedToOriginal = outputPath == "original"
+                    
                     // Clear in-memory annotations since they're now in the PDF
                     _pageStrokes.clear()
                     _pageShapes.clear()
@@ -834,35 +842,47 @@ class ReaderViewModel @Inject constructor(
                     bitmapCache.clear()
                     pageBitmapFlows.forEach { (_, flow) -> flow.value = null }
                     
-                    // Reopen the document
-                    val reopenResult = pdfRenderer.reopenDocument(uri)
-                    
-                    if (reopenResult.isSuccess) {
-                        val doc = reopenResult.getOrNull()!!
-                        currentDocumentPath = doc.path
-                        currentDocumentUri = uri
+                    if (savedToOriginal) {
+                        // Reopen the document from original URI
+                        val reopenResult = pdfRenderer.reopenDocument(uri)
                         
-                        _uiState.update { 
-                            it.copy(
-                                isSaving = false,
-                                hasUnsavedChanges = false,
-                                error = null,
-                                successMessage = "Annotations saved permanently to PDF"
-                            )
-                        }
-                        
-                        // Re-render current page
-                        val currentPage = _uiState.value.currentPage
-                        withContext(Dispatchers.IO) {
-                            renderPage(currentPage)
+                        if (reopenResult.isSuccess) {
+                            val doc = reopenResult.getOrNull()!!
+                            currentDocumentPath = doc.path
+                            currentDocumentUri = uri
+                            
+                            _uiState.update { 
+                                it.copy(
+                                    isSaving = false,
+                                    hasUnsavedChanges = false,
+                                    error = null,
+                                    successMessage = "Annotations saved permanently to PDF"
+                                )
+                            }
+                            
+                            // Re-render current page
+                            val currentPage = _uiState.value.currentPage
+                            withContext(Dispatchers.IO) {
+                                renderPage(currentPage)
+                            }
+                        } else {
+                            _uiState.update { 
+                                it.copy(
+                                    isSaving = false,
+                                    hasUnsavedChanges = false,
+                                    error = null,
+                                    successMessage = "Saved! Please reopen the file to see changes."
+                                )
+                            }
                         }
                     } else {
+                        // Saved to app storage - show the path
                         _uiState.update { 
                             it.copy(
                                 isSaving = false,
                                 hasUnsavedChanges = false,
                                 error = null,
-                                successMessage = "Saved! Please reopen the file to see changes."
+                                successMessage = "Saved to: $outputPath"
                             )
                         }
                     }
@@ -909,6 +929,69 @@ class ReaderViewModel @Inject constructor(
         // Close the document
         viewModelScope.launch {
             pdfRenderer.closeDocument()
+        }
+    }
+    
+    /**
+     * Export the current PDF to the public Downloads folder for testing.
+     * This is useful for verifying that the saved PDF is valid in other readers.
+     */
+    fun exportToDownloads() {
+        val sourcePath = currentDocumentPath
+        if (sourcePath.isBlank()) {
+            _uiState.update { it.copy(error = "No document to export") }
+            return
+        }
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val sourceFile = java.io.File(sourcePath)
+                if (!sourceFile.exists()) {
+                    withContext(Dispatchers.Main) {
+                        _uiState.update { it.copy(error = "Source file not found") }
+                    }
+                    return@launch
+                }
+                
+                // Get public Downloads directory
+                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                
+                val originalName = sourcePath.substringAfterLast("/").substringAfterLast("\\")
+                val baseName = originalName.substringBeforeLast(".")
+                val extension = originalName.substringAfterLast(".", "pdf")
+                val exportName = "${baseName}_exported.${extension}"
+                
+                val destFile = java.io.File(downloadsDir, exportName)
+                
+                android.util.Log.d("ReaderViewModel", "Exporting from: $sourcePath")
+                android.util.Log.d("ReaderViewModel", "Exporting to: ${destFile.absolutePath}")
+                
+                sourceFile.copyTo(destFile, overwrite = true)
+                
+                android.util.Log.d("ReaderViewModel", "Export complete: ${destFile.length()} bytes")
+                
+                // Notify MediaScanner so file appears in file managers
+                android.media.MediaScannerConnection.scanFile(
+                    appContext,
+                    arrayOf(destFile.absolutePath),
+                    arrayOf("application/pdf")
+                ) { path, uri ->
+                    android.util.Log.d("ReaderViewModel", "MediaScanner scanned: $path -> $uri")
+                }
+                
+                withContext(Dispatchers.Main) {
+                    _uiState.update { 
+                        it.copy(successMessage = "Exported to Downloads: $exportName") 
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ReaderViewModel", "Export failed", e)
+                withContext(Dispatchers.Main) {
+                    _uiState.update { it.copy(error = "Export failed: ${e.message}") }
+                }
+            }
         }
     }
 }

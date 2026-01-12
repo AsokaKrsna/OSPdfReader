@@ -110,7 +110,8 @@ fun ReaderScreen(
                     onSave = { viewModel.saveAnnotations() },
                     onMore = { viewModel.toggleMoreMenu() },
                     onDismissMenu = { viewModel.dismissMoreMenu() },
-                    onFlattenAnnotations = { viewModel.flattenAnnotationsToPdf() }
+                    onFlattenAnnotations = { viewModel.flattenAnnotationsToPdf() },
+                    onExportToDownloads = { viewModel.exportToDownloads() }
                 )
             }
         },
@@ -450,6 +451,17 @@ private fun PdfPageWithAnnotations(
                         onStrokeEnd = { stroke ->
                             // Convert the drawn stroke from screen space to PDF page space so saved annotations align.
                             val scale = fitScale * renderScale
+                            android.util.Log.d("ReaderScreen", "Coordinate transform: fitScale=$fitScale, renderScale=$renderScale, scale=$scale")
+                            android.util.Log.d("ReaderScreen", "Image offset: left=$imageLeft, top=$imageTop")
+                            android.util.Log.d("ReaderScreen", "Bitmap size: ${bitmap?.width}x${bitmap?.height}")
+                            
+                            // Log original screen coords
+                            if (stroke.points.isNotEmpty()) {
+                                val firstPt = stroke.points.first()
+                                val lastPt = stroke.points.last()
+                                android.util.Log.d("ReaderScreen", "Screen coords: first=(${firstPt.x}, ${firstPt.y}), last=(${lastPt.x}, ${lastPt.y})")
+                            }
+                            
                             val mapped = stroke.copy(
                                 points = stroke.points.map { pt ->
                                     com.ospdf.reader.domain.model.StrokePoint(
@@ -461,6 +473,14 @@ private fun PdfPageWithAnnotations(
                                 },
                                 strokeWidth = stroke.strokeWidth / scale
                             )
+                            
+                            // Log mapped PDF coords
+                            if (mapped.points.isNotEmpty()) {
+                                val firstPt = mapped.points.first()
+                                val lastPt = mapped.points.last()
+                                android.util.Log.d("ReaderScreen", "PDF coords: first=(${firstPt.x}, ${firstPt.y}), last=(${lastPt.x}, ${lastPt.y})")
+                            }
+                            
                             viewModel.addStroke(mapped)
                         },
                         onStrokeErase = { strokeId -> viewModel.removeStroke(strokeId) },
@@ -524,7 +544,8 @@ private fun ReaderTopBar(
     onSave: () -> Unit,
     onMore: () -> Unit,
     onDismissMenu: () -> Unit,
-    onFlattenAnnotations: () -> Unit
+    onFlattenAnnotations: () -> Unit,
+    onExportToDownloads: () -> Unit
 ) {
     TopAppBar(
         title = {
@@ -584,6 +605,16 @@ private fun ReaderTopBar(
                         leadingIcon = {
                             Icon(
                                 Icons.Outlined.Lock,
+                                contentDescription = null
+                            )
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Export to Downloads") },
+                        onClick = onExportToDownloads,
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Share,
                                 contentDescription = null
                             )
                         }
