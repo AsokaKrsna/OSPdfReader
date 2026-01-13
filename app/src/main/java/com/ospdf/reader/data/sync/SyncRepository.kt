@@ -111,6 +111,19 @@ class SyncRepository @Inject constructor(
     suspend fun importFromDrive(driveFileId: String, fileName: String): Result<SyncedDocumentEntity> =
         withContext(Dispatchers.IO) {
             try {
+                // Check if already synced
+                val existing = syncedDocumentDao.getByDriveFileId(driveFileId)
+                if (existing != null) {
+                    val localFile = File(existing.localPath)
+                    if (localFile.exists()) {
+                        // Already downloaded and exists
+                        return@withContext Result.success(existing)
+                    } else {
+                        // Entry exists but file missing - clean up stale entry
+                        syncedDocumentDao.delete(existing)
+                    }
+                }
+                
                 val syncFolder = getSyncFolder()
                 var destFile = File(syncFolder, fileName)
                 

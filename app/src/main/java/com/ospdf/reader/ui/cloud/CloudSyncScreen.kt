@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.google.api.services.drive.model.File as DriveFile
 import com.ospdf.reader.data.cloud.AuthState
+import com.ospdf.reader.data.local.SyncStatus
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -44,8 +45,11 @@ fun CloudSyncScreen(
     onRefresh: () -> Unit,
     onFileClick: (DriveFile) -> Unit,
     onUploadClick: () -> Unit,
+    onForceSync: () -> Unit = {},
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fileStatuses: Map<String, SyncStatus> = emptyMap(),
+    onForceFileUpload: (DriveFile) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     
@@ -70,6 +74,9 @@ fun CloudSyncScreen(
                 },
                 actions = {
                     if (authState is AuthState.SignedIn) {
+                        IconButton(onClick = onForceSync) {
+                            Icon(Icons.Filled.Sync, "Force Sync")
+                        }
                         IconButton(onClick = onRefresh) {
                             Icon(Icons.Filled.Refresh, "Refresh")
                         }
@@ -126,7 +133,9 @@ fun CloudSyncScreen(
                     } else {
                         DriveFilesList(
                             files = driveFiles,
-                            onFileClick = onFileClick
+                            onFileClick = onFileClick,
+                            fileStatuses = fileStatuses,
+                            onForceFileUpload = onForceFileUpload
                         )
                     }
                 }
@@ -287,7 +296,9 @@ private fun ErrorContent(message: String) {
 @Composable
 private fun DriveFilesList(
     files: List<DriveFile>,
-    onFileClick: (DriveFile) -> Unit
+    onFileClick: (DriveFile) -> Unit,
+    fileStatuses: Map<String, SyncStatus>,
+    onForceFileUpload: (DriveFile) -> Unit
 ) {
     Text(
         text = "Your PDFs",
@@ -300,7 +311,12 @@ private fun DriveFilesList(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(files) { file ->
-            DriveFileItem(file = file, onClick = { onFileClick(file) })
+            DriveFileItem(
+                file = file, 
+                onClick = { onFileClick(file) },
+                syncStatus = fileStatuses[file.id],
+                onForceFileUpload = { onForceFileUpload(file) }
+            )
         }
     }
 }
@@ -308,7 +324,9 @@ private fun DriveFilesList(
 @Composable
 private fun DriveFileItem(
     file: DriveFile,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    syncStatus: SyncStatus?,
+    onForceFileUpload: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
     
@@ -359,11 +377,31 @@ private fun DriveFileItem(
                 }
             }
             
-            Icon(
-                Icons.Filled.Download,
-                contentDescription = "Download",
-                tint = MaterialTheme.colorScheme.primary
-            )
+            when (syncStatus) {
+                SyncStatus.PENDING_UPLOAD -> {
+                    IconButton(onClick = onForceFileUpload) {
+                        Icon(
+                            Icons.Filled.CloudUpload,
+                            contentDescription = "Upload Changes",
+                            tint = Color(0xFFFF9800) // Orange
+                        )
+                    }
+                }
+                SyncStatus.SYNCED -> {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = "Synced",
+                        tint = Color(0xFF4CAF50) // Green
+                    )
+                }
+                else -> {
+                    Icon(
+                        Icons.Filled.Download,
+                        contentDescription = "Download",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
     }
 }

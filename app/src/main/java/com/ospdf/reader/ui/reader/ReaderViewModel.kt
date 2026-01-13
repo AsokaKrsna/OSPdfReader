@@ -25,6 +25,7 @@ import com.ospdf.reader.ui.tools.LassoSelection
 import com.ospdf.reader.ui.theme.InkColors
 import com.ospdf.reader.data.local.RecentDocumentsRepository
 import com.ospdf.reader.data.local.AnnotationRepository
+import com.ospdf.reader.data.sync.SyncRepository
 import com.ospdf.reader.util.BitmapCache
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -75,6 +76,7 @@ class ReaderViewModel @Inject constructor(
     private val googleDriveSync: GoogleDriveSync,
     private val preferencesManager: PreferencesManager,
     private val annotationRepository: AnnotationRepository,
+    private val syncRepository: SyncRepository,
     private val bitmapCache: BitmapCache
 ) : ViewModel() {
 
@@ -700,49 +702,40 @@ class ReaderViewModel @Inject constructor(
      * Saves annotations to the PDF.
      */
     fun saveAnnotations() {
-        if (_pageStrokes.isEmpty()) return
+        if (_pageStrokes.isEmpty() && _pageShapes.isEmpty()) return
+        
+        val uri = currentDocumentUri ?: return
         
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true) }
             
-            // Convert to map of page -> strokes
+            // Convert to map of page -> strokes/shapes
             val strokesMap = _pageStrokes.mapValues { it.value.toList() }
+            val shapesMap = _pageShapes.mapValues { it.value.toList() }
             
-            // Generate output path (same location with "_annotated" suffix)
-            val outputPath = currentDocumentPath.replace(".pdf", "_annotated.pdf")
-            
-            annotationManager.saveAnnotatedPdf(
+            // Try to save effectively to the original file
+            val result = annotationManager.saveAnnotationsToOriginalFile(
+                originalUri = uri,
                 sourcePath = currentDocumentPath,
                 strokes = strokesMap,
-                outputPath = outputPath
-            ).fold(
-                onSuccess = {
-                    // Trigger Drive sync if enabled
-                    viewModelScope.launch(Dispatchers.IO) {
-                        try {
-                            val prefs = preferencesManager.userPreferences.first()
-                            if (prefs.syncEnabled) {
-                                val syncResult = googleDriveSync.uploadPdf(java.io.File(outputPath))
-                                if (!syncResult.success) {
-                                    _uiState.update {
-                                        it.copy(
-                                            error = syncResult.error ?: "Drive sync failed"
-                                        )
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            _uiState.update {
-                                it.copy(
-                                    error = "Drive sync failed: ${e.message}"
-                                )
-                            }
-                        }
+                shapes = shapesMap
+            )
+            
+            result.fold(
+                onSuccess = { path ->
+                    // Helper to normalize path
+                    val savedPath = if (path == "original") currentDocumentPath else path
+                    
+                    // Mark as modified if it's a synced document
+                    if (savedPath != null && savedPath.isNotEmpty()) {
+                        syncRepository.markModified(savedPath)
                     }
+                    
                     _uiState.update { 
                         it.copy(
                             isSaving = false,
-                            hasUnsavedChanges = false
+                            hasUnsavedChanges = false,
+                            successMessage = "Saved successfully"
                         )
                     }
                 },

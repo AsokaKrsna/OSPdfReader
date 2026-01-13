@@ -12,9 +12,13 @@ import com.ospdf.reader.data.cloud.GoogleDriveSync
 import com.ospdf.reader.data.sync.SyncRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import com.ospdf.reader.data.local.SyncStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -27,7 +31,10 @@ data class CloudSyncUiState(
     val isUploading: Boolean = false,
     val uploadingFileName: String? = null,
     val error: String? = null,
-    val successMessage: String? = null
+    val successMessage: String? = null,
+    val isSyncing: Boolean = false,
+
+    val fileStatuses: Map<String, SyncStatus> = emptyMap()
 )
 
 @HiltViewModel
@@ -51,6 +58,16 @@ class CloudSyncViewModel @Inject constructor(
                 loadDriveFiles()
             }
         }
+        
+        // Observe synced documents to update UI status
+        syncRepository.getAllSyncedDocuments()
+            .onEach { syncedDocs ->
+                val statuses = syncedDocs.associate { 
+                    (it.driveFileId ?: "") to it.syncStatus 
+                }
+                _uiState.update { it.copy(fileStatuses = statuses) }
+            }
+            .launchIn(viewModelScope)
     }
     
     fun getSignInIntent(): Intent = driveAuth.getSignInIntent()
@@ -205,5 +222,28 @@ class CloudSyncViewModel @Inject constructor(
     
     fun clearSuccessMessage() {
         _uiState.value = _uiState.value.copy(successMessage = null)
+    }
+    
+    fun forceSync() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isSyncing = true)
+            try {
+                // Upload pending changes
+                syncRepository.syncAllPending()
+                
+                // Refresh list
+                loadDriveFiles()
+                
+                _uiState.value = _uiState.value.copy(
+                    isSyncing = false,
+                    successMessage = "Sync completed"
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isSyncing = false,
+                    error = "Sync failed: ${e.message}"
+                )
+            }
+        }
     }
 }

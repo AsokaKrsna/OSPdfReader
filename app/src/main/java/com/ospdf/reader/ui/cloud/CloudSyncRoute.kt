@@ -62,14 +62,17 @@ fun CloudSyncRoute(
                     onOpenFile(Uri.parse("file://$localPath"))
                 }
             },
+            fileStatuses = uiState.fileStatuses,
+            onForceFileUpload = { viewModel.forceSync() },
             onUploadClick = { 
                 filePickerLauncher.launch(arrayOf("application/pdf"))
             },
+            onForceSync = { viewModel.forceSync() },
             onBack = onBack
         )
         
         // Download/Upload progress overlay
-        if (uiState.isDownloading || uiState.isUploading) {
+        if (uiState.isDownloading || uiState.isUploading || uiState.isSyncing) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -85,7 +88,15 @@ fun CloudSyncRoute(
                     ) {
                         CircularProgressIndicator()
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text(if (uiState.isUploading) "Uploading..." else "Downloading...")
+                        
+                        val text = when {
+                            uiState.isUploading -> "Uploading..."
+                            uiState.isDownloading -> "Downloading..."
+                            uiState.isSyncing -> "Syncing..."
+                            else -> "Processing..."
+                        }
+                        Text(text)
+                        
                         (uiState.uploadingFileName ?: uiState.downloadingFileName)?.let { name ->
                             Text(
                                 text = name,

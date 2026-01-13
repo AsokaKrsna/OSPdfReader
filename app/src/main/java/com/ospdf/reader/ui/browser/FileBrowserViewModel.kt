@@ -66,4 +66,10 @@ class FileBrowserViewModel @Inject constructor(
             recentRepository.recordOpen(document)
         }
     }
+    
+    fun removeRecentFile(document: PdfDocument) {
+        viewModelScope.launch {
+            recentRepository.removeDocument(document.path)
+        }
+    }
 }

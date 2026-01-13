@@ -20,6 +20,10 @@ class RecentDocumentsRepository @Inject constructor(
     suspend fun recordOpen(document: PdfDocument) = withContext(Dispatchers.IO) {
         dao.insertDocument(document.toEntity())
     }
+    
+    suspend fun removeDocument(path: String) = withContext(Dispatchers.IO) {
+        dao.deleteByPath(path)
+    }
 
     private fun RecentDocumentEntity.toDomain(): PdfDocument {
         // Use original URI if available, otherwise fall back to file path (old records)

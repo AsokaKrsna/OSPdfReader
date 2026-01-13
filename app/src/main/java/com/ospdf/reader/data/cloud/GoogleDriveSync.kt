@@ -117,10 +117,9 @@ class GoogleDriveSync @Inject constructor(
         try {
             val drive = auth.getDriveService() ?: return@withContext emptyList()
             
-            val folderId = getOrCreateAppFolder() ?: return@withContext emptyList()
-            
+            // Search globally for PDFs
             val result = drive.files().list()
-                .setQ("'$folderId' in parents and mimeType='$MIME_TYPE_PDF' and trashed=false")
+                .setQ("mimeType='$MIME_TYPE_PDF' and trashed=false")
                 .setSpaces("drive")
                 .setFields("files(id, name, modifiedTime, size)")
                 .execute()

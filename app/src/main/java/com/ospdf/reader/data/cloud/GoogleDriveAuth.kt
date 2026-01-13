@@ -53,7 +53,7 @@ class GoogleDriveAuth @Inject constructor(
         if (googleSignInClient == null) {
             val signInOptions = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
-                .requestScopes(Scope(DriveScopes.DRIVE_FILE))
+                .requestScopes(Scope(DriveScopes.DRIVE))
                 .build()
             
             googleSignInClient = GoogleSignIn.getClient(context, signInOptions)
@@ -122,14 +122,14 @@ class GoogleDriveAuth @Inject constructor(
             Result.failure(e)
         }
     }
-    
+
     /**
      * Checks if user is already signed in silently.
      */
     suspend fun silentSignIn(): Boolean = withContext(Dispatchers.IO) {
         try {
             val account = GoogleSignIn.getLastSignedInAccount(context)
-            if (account != null && GoogleSignIn.hasPermissions(account, Scope(DriveScopes.DRIVE_FILE))) {
+            if (account != null && GoogleSignIn.hasPermissions(account, Scope(DriveScopes.DRIVE))) {
                 initializeDriveService(account)
                 _authState.value = AuthState.SignedIn(account)
                 true
@@ -151,14 +151,14 @@ class GoogleDriveAuth @Inject constructor(
             _authState.value = AuthState.NotSignedIn
         }
     }
-    
+
     /**
      * Initializes the Drive API service.
      */
     private fun initializeDriveService(account: GoogleSignInAccount) {
         val credential = GoogleAccountCredential.usingOAuth2(
             context,
-            Collections.singleton(DriveScopes.DRIVE_FILE)
+            Collections.singleton(DriveScopes.DRIVE)
         ).apply {
             selectedAccount = account.account
         }
