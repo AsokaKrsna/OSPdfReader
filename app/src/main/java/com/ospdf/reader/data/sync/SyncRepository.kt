@@ -167,7 +167,26 @@ class SyncRepository @Inject constructor(
      * Marks a document as modified (needing sync).
      */
     suspend fun markModified(localPath: String) {
-        syncedDocumentDao.markModified(localPath)
+        val rowsUpdated = syncedDocumentDao.markModified(localPath)
+        
+        if (rowsUpdated == 0) {
+            // Check for path mismatch (e.g. symlinks, casing)
+            try {
+                val inputCanonical = File(localPath).canonicalPath
+                val allDocs = syncedDocumentDao.getAllDocumentsSnapshot()
+                
+                val match = allDocs.find { 
+                    try { File(it.localPath).canonicalPath == inputCanonical } catch(e: Exception) { false }
+                }
+                
+                if (match != null) {
+                    // Update using the matched path from DB
+                    syncedDocumentDao.markModified(match.localPath)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
     
     /**
@@ -208,7 +227,7 @@ class SyncRepository @Inject constructor(
                     return@withContext Result.failure(Exception("File not found"))
                 }
                 
-                val result = driveSync.uploadPdf(localFile)
+                val result = driveSync.uploadPdf(localFile, entity.driveFileId)
                 
                 if (result.success && result.fileId != null) {
                     syncedDocumentDao.updateAfterUpload(

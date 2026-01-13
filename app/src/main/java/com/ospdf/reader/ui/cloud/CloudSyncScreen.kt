@@ -20,12 +20,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.google.api.services.drive.model.File as DriveFile
 import com.ospdf.reader.data.cloud.AuthState
 import com.ospdf.reader.data.local.SyncStatus
+import com.ospdf.reader.ui.components.ErrorMessage
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -37,19 +38,19 @@ import java.util.*
 @Composable
 fun CloudSyncScreen(
     authState: AuthState,
-    driveFiles: List<DriveFile>,
+    items: List<CloudFileItem>,
     isLoading: Boolean,
     onSignIn: () -> Intent,
     onSignInResult: suspend (Intent?) -> Unit,
     onSignOut: () -> Unit,
     onRefresh: () -> Unit,
-    onFileClick: (DriveFile) -> Unit,
+    onFileClick: (CloudFileItem) -> Unit,
     onUploadClick: () -> Unit,
     onForceSync: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    fileStatuses: Map<String, SyncStatus> = emptyMap(),
-    onForceFileUpload: (DriveFile) -> Unit = {}
+    error: String? = null,
+    onDismissError: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     
@@ -128,20 +129,23 @@ fun CloudSyncScreen(
                         ) {
                             CircularProgressIndicator()
                         }
-                    } else if (driveFiles.isEmpty()) {
+                    } else if (items.isEmpty()) {
                         EmptyDriveContent()
                     } else {
                         DriveFilesList(
-                            files = driveFiles,
+                            files = items,
                             onFileClick = onFileClick,
-                            fileStatuses = fileStatuses,
-                            onForceFileUpload = onForceFileUpload
+                            onForceFileUpload = onForceSync
                         )
                     }
                 }
                 is AuthState.Error -> {
                     ErrorContent(message = authState.message)
                 }
+            }
+            
+            if (error != null) {
+                ErrorMessage(message = error, onDismiss = onDismissError)
             }
         }
     }
@@ -286,7 +290,7 @@ private fun ErrorContent(message: String) {
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = message,
+            message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error
         )
@@ -295,10 +299,9 @@ private fun ErrorContent(message: String) {
 
 @Composable
 private fun DriveFilesList(
-    files: List<DriveFile>,
-    onFileClick: (DriveFile) -> Unit,
-    fileStatuses: Map<String, SyncStatus>,
-    onForceFileUpload: (DriveFile) -> Unit
+    files: List<CloudFileItem>,
+    onFileClick: (CloudFileItem) -> Unit,
+    onForceFileUpload: () -> Unit
 ) {
     Text(
         text = "Your PDFs",
@@ -314,8 +317,7 @@ private fun DriveFilesList(
             DriveFileItem(
                 file = file, 
                 onClick = { onFileClick(file) },
-                syncStatus = fileStatuses[file.id],
-                onForceFileUpload = { onForceFileUpload(file) }
+                onForceFileUpload = onForceFileUpload
             )
         }
     }
@@ -323,12 +325,12 @@ private fun DriveFilesList(
 
 @Composable
 private fun DriveFileItem(
-    file: DriveFile,
+    file: CloudFileItem,
     onClick: () -> Unit,
-    syncStatus: SyncStatus?,
     onForceFileUpload: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    val syncStatus = file.syncStatus
     
     Surface(
         onClick = onClick,
@@ -353,27 +355,20 @@ private fun DriveFileItem(
             
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = file.name ?: "Untitled",
+                    text = file.name,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Row {
-                    file.modifiedTime?.let { time ->
-                        Text(
-                            text = dateFormat.format(Date(time.value)),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    file.getSize()?.let { size ->
-                        Text(
-                            text = " • ${formatFileSize(size)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    // Removed modified time checking for simplicity or add back if CloudFileItem has it
+                    // file.size check
+                    Text(
+                        text = formatFileSize(file.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             
@@ -392,6 +387,12 @@ private fun DriveFileItem(
                         Icons.Filled.CheckCircle,
                         contentDescription = "Synced",
                         tint = Color(0xFF4CAF50) // Green
+                    )
+                }
+                SyncStatus.UPLOADING, SyncStatus.DOWNLOADING -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
                     )
                 }
                 else -> {

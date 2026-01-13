@@ -61,7 +61,8 @@ data class ReaderUiState(
     val zoomLevel: Float = 1f,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
-    val hasUnsavedChanges: Boolean = false
+    val hasUnsavedChanges: Boolean = false,
+    val isExiting: Boolean = false
 )
 
 /**
@@ -702,7 +703,13 @@ class ReaderViewModel @Inject constructor(
      * Saves annotations to the PDF.
      */
     fun saveAnnotations() {
-        if (_pageStrokes.isEmpty() && _pageShapes.isEmpty()) return
+        if (_pageStrokes.isEmpty() && _pageShapes.isEmpty()) {
+            // No annotations to save, but maybe we want to exit?
+            if (_uiState.value.isExiting) {
+                // Determine completion deferred to UI side observing hasUnsavedChanges=false
+            }
+            return
+        }
         
         val uri = currentDocumentUri ?: return
         
@@ -743,12 +750,18 @@ class ReaderViewModel @Inject constructor(
                     _uiState.update { 
                         it.copy(
                             isSaving = false,
-                            error = "Failed to save: ${error.message}"
+                            error = "Failed to save: ${error.message}",
+                            isExiting = false // Cancel exit on error
                         )
                     }
                 }
             )
         }
+    }
+    
+    fun saveAndExit() {
+        _uiState.update { it.copy(isExiting = true) }
+        saveAnnotations()
     }
     
     // -------------------- UI State Toggles --------------------

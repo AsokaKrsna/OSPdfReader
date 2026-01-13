@@ -50,25 +50,25 @@ fun CloudSyncRoute(
     Box(modifier = Modifier.fillMaxSize()) {
         CloudSyncScreen(
             authState = authState,
-            driveFiles = uiState.driveFiles,
+            items = uiState.items,
             isLoading = uiState.isLoading,
             onSignIn = { viewModel.getSignInIntent() },
             onSignInResult = { data -> viewModel.handleSignInResult(data) },
             onSignOut = { viewModel.signOut() },
             onRefresh = { viewModel.loadDriveFiles() },
-            onFileClick = { driveFile ->
-                viewModel.downloadAndOpenFile(driveFile) { localPath ->
+            onFileClick = { fileItem ->
+                viewModel.downloadAndOpenFile(fileItem) { localPath ->
                     // Convert local path to Uri and open
                     onOpenFile(Uri.parse("file://$localPath"))
                 }
             },
-            fileStatuses = uiState.fileStatuses,
-            onForceFileUpload = { viewModel.forceSync() },
             onUploadClick = { 
                 filePickerLauncher.launch(arrayOf("application/pdf"))
             },
             onForceSync = { viewModel.forceSync() },
-            onBack = onBack
+            onBack = onBack,
+            error = uiState.error,
+            onDismissError = { viewModel.clearError() }
         )
         
         // Download/Upload progress overlay

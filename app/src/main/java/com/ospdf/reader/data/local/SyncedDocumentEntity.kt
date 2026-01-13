@@ -138,12 +138,18 @@ interface SyncedDocumentDao {
     /**
      * Update local modification timestamp.
      */
+    @Query("SELECT * FROM synced_documents")
+    suspend fun getAllDocumentsSnapshot(): List<SyncedDocumentEntity>
+
+    /**
+     * Update local modification timestamp.
+     */
     @Query("UPDATE synced_documents SET local_modified_at = :timestamp, sync_status = :status WHERE local_path = :localPath")
     suspend fun markModified(
         localPath: String,
         timestamp: Long = System.currentTimeMillis(),
         status: SyncStatus = SyncStatus.PENDING_UPLOAD
-    )
+    ): Int
     
     /**
      * Delete a synced document entry.

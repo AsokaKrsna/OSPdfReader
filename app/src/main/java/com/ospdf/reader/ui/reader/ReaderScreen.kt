@@ -3,6 +3,7 @@ package com.ospdf.reader.ui.reader
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.animation.*
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
@@ -41,6 +42,7 @@ import com.ospdf.reader.ui.tools.LassoSelectionCanvas
 import com.ospdf.reader.ui.tools.ShapeCanvas
 import com.ospdf.reader.data.pdf.SearchResult
 import kotlinx.coroutines.launch
+import com.ospdf.reader.ui.components.ErrorMessage
 
 /**
  * Main PDF reader screen with page viewing, zoom/pan, and annotation support.
@@ -70,6 +72,18 @@ fun ReaderScreen(
                 duration = SnackbarDuration.Short
             )
             viewModel.clearSuccessMessage()
+        }
+    }
+
+    // Handle back press with auto-save
+    BackHandler(enabled = uiState.hasUnsavedChanges) {
+        viewModel.saveAndExit()
+    }
+    
+    // Auto-exit after successful save
+    LaunchedEffect(uiState.isExiting, uiState.hasUnsavedChanges, uiState.isSaving) {
+        if (uiState.isExiting && !uiState.hasUnsavedChanges && !uiState.isSaving) {
+            onBack()
         }
     }
     
@@ -809,33 +823,4 @@ private fun ReaderBottomBar(
     }
 }
 
-@Composable
-private fun ErrorMessage(
-    message: String,
-    onRetry: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            Icons.Outlined.Error,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.error
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyLarge,
-            color = Color.White.copy(alpha = 0.8f)
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(onClick = onRetry) {
-            Text("Retry")
-        }
-    }
-}
+

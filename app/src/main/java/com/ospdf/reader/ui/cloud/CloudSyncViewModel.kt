@@ -13,6 +13,7 @@ import com.ospdf.reader.data.sync.SyncRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.ospdf.reader.data.local.SyncStatus
+import com.ospdf.reader.data.local.SyncedDocumentEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,8 +24,18 @@ import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
 
+data class CloudFileItem(
+    val id: String,
+    val name: String,
+    val size: Long,
+    val mimeType: String = "application/pdf",
+    val syncStatus: SyncStatus? = null,
+    val localPath: String? = null,
+    val driveFileId: String? = null
+)
+
 data class CloudSyncUiState(
-    val driveFiles: List<DriveFile> = emptyList(),
+    val items: List<CloudFileItem> = emptyList(),
     val isLoading: Boolean = false,
     val isDownloading: Boolean = false,
     val downloadingFileName: String? = null,
@@ -32,9 +43,7 @@ data class CloudSyncUiState(
     val uploadingFileName: String? = null,
     val error: String? = null,
     val successMessage: String? = null,
-    val isSyncing: Boolean = false,
-
-    val fileStatuses: Map<String, SyncStatus> = emptyMap()
+    val isSyncing: Boolean = false
 )
 
 @HiltViewModel
@@ -44,6 +53,9 @@ class CloudSyncViewModel @Inject constructor(
     private val driveSync: GoogleDriveSync,
     private val syncRepository: SyncRepository
 ) : ViewModel() {
+    
+    private val _driveFiles = MutableStateFlow<List<DriveFile>>(emptyList())
+    private val _localDocs = MutableStateFlow<List<SyncedDocumentEntity>>(emptyList())
     
     val authState: StateFlow<AuthState> = driveAuth.authState
     
@@ -59,15 +71,55 @@ class CloudSyncViewModel @Inject constructor(
             }
         }
         
-        // Observe synced documents to update UI status
+        // Observe local docs
         syncRepository.getAllSyncedDocuments()
-            .onEach { syncedDocs ->
-                val statuses = syncedDocs.associate { 
-                    (it.driveFileId ?: "") to it.syncStatus 
-                }
-                _uiState.update { it.copy(fileStatuses = statuses) }
-            }
+            .onEach { _localDocs.value = it }
             .launchIn(viewModelScope)
+            
+        // Combine flows to build UI state
+        kotlinx.coroutines.flow.combine(_driveFiles, _localDocs) { driveFiles, localDocs ->
+            mergeFiles(driveFiles, localDocs)
+        }.onEach { mergedItems ->
+            _uiState.update { it.copy(items = mergedItems) }
+        }.launchIn(viewModelScope)
+    }
+    
+    private fun mergeFiles(driveFiles: List<DriveFile>, localDocs: List<SyncedDocumentEntity>): List<CloudFileItem> {
+        val localMap = localDocs.associateBy { it.driveFileId }
+        val mergedList = mutableListOf<CloudFileItem>()
+        val processedDriveIds = mutableSetOf<String>()
+        
+        // Process remote files
+        for (driveFile in driveFiles) {
+            val localDoc = localMap[driveFile.id]
+            processedDriveIds.add(driveFile.id)
+            
+            mergedList.add(CloudFileItem(
+                id = driveFile.id, // Use Drive ID
+                name = driveFile.name ?: "Unknown",
+                size = driveFile.getSize() ?: 0L,
+                mimeType = driveFile.mimeType ?: "application/pdf",
+                syncStatus = localDoc?.syncStatus,
+                localPath = localDoc?.localPath,
+                driveFileId = driveFile.id
+            ))
+        }
+        
+        // Process local-only files (Pending Upload or Disappeared from Remote)
+        for (doc in localDocs) {
+            if (doc.driveFileId == null || !processedDriveIds.contains(doc.driveFileId)) {
+                mergedList.add(CloudFileItem(
+                    id = doc.id, // Use Local UUID since Drive ID might be null
+                    name = doc.fileName,
+                    size = doc.fileSize,
+                    syncStatus = doc.syncStatus,
+                    localPath = doc.localPath,
+                    driveFileId = doc.driveFileId
+                ))
+            }
+        }
+        
+        return mergedList.sortedBy { it.name.lowercase() }
     }
     
     fun getSignInIntent(): Intent = driveAuth.getSignInIntent()
@@ -92,10 +144,8 @@ class CloudSyncViewModel @Inject constructor(
             
             try {
                 val files = driveSync.listPdfs()
-                _uiState.value = _uiState.value.copy(
-                    driveFiles = files,
-                    isLoading = false
-                )
+                _driveFiles.value = files
+                _uiState.value = _uiState.value.copy(isLoading = false)
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -174,19 +224,19 @@ class CloudSyncViewModel @Inject constructor(
      * Returns the local path if successful.
      */
     fun downloadAndOpenFile(
-        driveFile: DriveFile,
+        fileItem: CloudFileItem,
         onSuccess: (String) -> Unit
     ) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isDownloading = true,
-                downloadingFileName = driveFile.name
+                downloadingFileName = fileItem.name
             )
             
             try {
                 val result = syncRepository.importFromDrive(
-                    driveFileId = driveFile.id,
-                    fileName = driveFile.name ?: "document.pdf"
+                    driveFileId = fileItem.driveFileId ?: fileItem.id, // Use driveId if available, else id
+                    fileName = fileItem.name
                 )
                 
                 result.fold(

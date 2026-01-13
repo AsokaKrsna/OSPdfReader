@@ -39,16 +39,36 @@ class GoogleDriveSync @Inject constructor(
     /**
      * Uploads a PDF file to Google Drive.
      */
-    suspend fun uploadPdf(localFile: File): SyncResult = withContext(Dispatchers.IO) {
+    suspend fun uploadPdf(localFile: File, existingFileId: String? = null): SyncResult = withContext(Dispatchers.IO) {
         try {
             val drive = auth.getDriveService()
                 ?: return@withContext SyncResult(false, error = "Not signed in to Google Drive")
             
+            val mediaContent = FileContent(MIME_TYPE_PDF, localFile)
+            
+            // Case 1: Update existing file by ID (if provided)
+            if (existingFileId != null) {
+                val fileMetadata = DriveFile().apply {
+                    name = localFile.name
+                }
+                
+                val updatedFile = drive.files().update(existingFileId, fileMetadata, mediaContent)
+                    .setFields("id, name")
+                    .execute()
+                    
+                return@withContext SyncResult(
+                    success = true,
+                    fileId = updatedFile.id,
+                    fileName = updatedFile.name
+                )
+            }
+            
+            // Case 2: New upload or find by name in app folder
             // Ensure app folder exists
             val folderId = getOrCreateAppFolder()
                 ?: return@withContext SyncResult(false, error = "Failed to create app folder")
             
-            // Check if file already exists
+            // Check if file already exists in app folder
             val existingFile = findFile(localFile.name, folderId)
             
             val fileMetadata = DriveFile().apply {
@@ -56,10 +76,8 @@ class GoogleDriveSync @Inject constructor(
                 parents = listOf(folderId)
             }
             
-            val mediaContent = FileContent(MIME_TYPE_PDF, localFile)
-            
             val uploadedFile = if (existingFile != null) {
-                // Update existing file
+                // Update existing file in app folder
                 drive.files().update(existingFile.id, fileMetadata, mediaContent)
                     .setFields("id, name")
                     .execute()
