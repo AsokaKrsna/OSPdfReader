@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.ospdf.reader.domain.model.AnnotationTool
 import com.ospdf.reader.domain.model.ReadingMode
-import com.ospdf.reader.ui.components.AnnotationToolbar
+import com.ospdf.reader.ui.components.FloatingAnnotationToolbar
 import com.ospdf.reader.ui.components.InkingCanvas
 import com.ospdf.reader.ui.tools.LassoSelectionCanvas
 import com.ospdf.reader.ui.tools.ShapeCanvas
@@ -193,7 +193,7 @@ fun ReaderScreen(
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = if (uiState.showAnnotationToolbar) 80.dp else 16.dp)
+                            .padding(bottom = 16.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(Color.Black.copy(alpha = 0.6f))
                             .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -223,15 +223,9 @@ fun ReaderScreen(
                         }
                     }
                     
-                    // Annotation toolbar
-                    AnimatedVisibility(
-                        visible = uiState.showAnnotationToolbar,
-                        enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-                        exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                    ) {
-                        AnnotationToolbar(
-                            modifier = Modifier.padding(bottom = 16.dp),
+                    // Floating Annotation toolbar
+                    if (uiState.showAnnotationToolbar) {
+                        FloatingAnnotationToolbar(
                             toolState = uiState.toolState,
                             canUndo = uiState.canUndo,
                             canRedo = uiState.canRedo,
