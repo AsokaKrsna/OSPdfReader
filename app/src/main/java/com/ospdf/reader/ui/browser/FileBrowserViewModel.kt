@@ -3,6 +3,7 @@ package com.ospdf.reader.ui.browser
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ospdf.reader.data.cloud.GoogleDriveAuth
 import com.ospdf.reader.data.local.RecentDocumentsRepository
 import com.ospdf.reader.domain.model.PdfDocument
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -19,7 +20,8 @@ import javax.inject.Inject
  */
 data class FileBrowserUiState(
     val recentFiles: List<PdfDocument> = emptyList(),
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val isSignedInToDrive: Boolean = false
 )
 
 /**
@@ -27,7 +29,8 @@ data class FileBrowserUiState(
  */
 @HiltViewModel
 class FileBrowserViewModel @Inject constructor(
-    private val recentRepository: RecentDocumentsRepository
+    private val recentRepository: RecentDocumentsRepository,
+    private val driveAuth: GoogleDriveAuth
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow(FileBrowserUiState())
@@ -42,6 +45,20 @@ class FileBrowserViewModel @Inject constructor(
                 )
             }
             .launchIn(viewModelScope)
+        
+        // Observe Drive auth state
+        driveAuth.authState
+            .onEach { authState ->
+                _uiState.value = _uiState.value.copy(
+                    isSignedInToDrive = driveAuth.isSignedIn()
+                )
+            }
+            .launchIn(viewModelScope)
+        
+        // Try silent sign-in on startup
+        viewModelScope.launch {
+            driveAuth.silentSignIn()
+        }
     }
     
     fun addToRecentFiles(document: PdfDocument) {

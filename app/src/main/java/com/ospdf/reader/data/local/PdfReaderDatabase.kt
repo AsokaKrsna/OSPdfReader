@@ -308,6 +308,17 @@ interface ShapeAnnotationDao {
 }
 
 /**
+ * Type converter for SyncStatus enum.
+ */
+class SyncStatusConverter {
+    @TypeConverter
+    fun fromSyncStatus(status: SyncStatus): String = status.name
+    
+    @TypeConverter
+    fun toSyncStatus(value: String): SyncStatus = SyncStatus.valueOf(value)
+}
+
+/**
  * Room database for the PDF reader application.
  */
 @Database(
@@ -316,17 +327,20 @@ interface ShapeAnnotationDao {
         MiniNoteEntity::class,
         RecentDocumentEntity::class,
         InkAnnotationEntity::class,
-        ShapeAnnotationEntity::class
+        ShapeAnnotationEntity::class,
+        SyncedDocumentEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
+@TypeConverters(SyncStatusConverter::class)
 abstract class PdfReaderDatabase : RoomDatabase() {
     abstract fun bookmarkDao(): BookmarkDao
     abstract fun miniNoteDao(): MiniNoteDao
     abstract fun recentDocumentDao(): RecentDocumentDao
     abstract fun inkAnnotationDao(): InkAnnotationDao
     abstract fun shapeAnnotationDao(): ShapeAnnotationDao
+    abstract fun syncedDocumentDao(): SyncedDocumentDao
     
     companion object {
         /**
@@ -335,6 +349,32 @@ abstract class PdfReaderDatabase : RoomDatabase() {
         val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE recent_documents ADD COLUMN original_uri TEXT NOT NULL DEFAULT ''")
+            }
+        }
+        
+        /**
+         * Migration from version 3 to 4: Add synced_documents table for Drive sync.
+         */
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS synced_documents (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        local_path TEXT NOT NULL,
+                        file_name TEXT NOT NULL,
+                        drive_file_id TEXT,
+                        local_modified_at INTEGER NOT NULL,
+                        drive_modified_at INTEGER,
+                        sync_status TEXT NOT NULL,
+                        last_sync_at INTEGER,
+                        file_size INTEGER NOT NULL,
+                        error_message TEXT,
+                        created_at INTEGER NOT NULL
+                    )
+                """)
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_synced_documents_local_path ON synced_documents (local_path)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_synced_documents_drive_file_id ON synced_documents (drive_file_id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_synced_documents_sync_status ON synced_documents (sync_status)")
             }
         }
     }

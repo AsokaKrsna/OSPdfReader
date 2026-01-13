@@ -47,6 +47,7 @@ import java.util.Locale
 fun FileBrowserScreen(
     onFileSelected: (Uri) -> Unit,
     onSettingsClick: () -> Unit,
+    onOpenFromDriveClick: () -> Unit = {},
     viewModel: FileBrowserViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -160,6 +161,15 @@ fun FileBrowserScreen(
                     )
                 },
                 actions = {
+                    // Open from Drive button - only visible when signed in
+                    if (uiState.isSignedInToDrive) {
+                        IconButton(onClick = onOpenFromDriveClick) {
+                            Icon(
+                                Icons.Filled.Cloud,
+                                contentDescription = "Open from Drive"
+                            )
+                        }
+                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(
                             Icons.Outlined.Settings,

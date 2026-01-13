@@ -11,6 +11,7 @@ import com.ospdf.reader.data.cloud.AuthState
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onCloudSyncClick: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val preferences by viewModel.preferences.collectAsState()
@@ -40,7 +41,7 @@ fun SettingsScreen(
         onHighContrastChange = { viewModel.onHighContrastChange(it) },
         onSignInClick = { signInLauncher.launch(viewModel.buildSignInIntent()) },
         onSignOutClick = { viewModel.signOut() },
-        onCloudSyncClick = { /* future: open Drive sync details */ },
+        onCloudSyncClick = onCloudSyncClick,
         onAboutClick = { /* TODO: show OSS licenses */ },
         onBack = onBack
     )

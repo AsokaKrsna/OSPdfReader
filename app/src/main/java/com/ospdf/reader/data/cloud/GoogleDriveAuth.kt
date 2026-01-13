@@ -74,18 +74,50 @@ class GoogleDriveAuth @Inject constructor(
      */
     suspend fun handleSignInResult(data: Intent?): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val task = GoogleSignIn.getSignedInAccountFromIntent(data)
-            val account = task.result
+            android.util.Log.d("GoogleDriveAuth", "Handling sign-in result, data: $data")
             
-            if (account != null) {
-                initializeDriveService(account)
-                _authState.value = AuthState.SignedIn(account)
-                Result.success(Unit)
+            val task = GoogleSignIn.getSignedInAccountFromIntent(data)
+            
+            // Check if the task completed successfully
+            if (task.isSuccessful) {
+                val account = task.result
+                if (account != null) {
+                    android.util.Log.d("GoogleDriveAuth", "Sign-in successful: ${account.email}")
+                    initializeDriveService(account)
+                    _authState.value = AuthState.SignedIn(account)
+                    Result.success(Unit)
+                } else {
+                    android.util.Log.e("GoogleDriveAuth", "Sign-in failed: No account returned")
+                    _authState.value = AuthState.Error("Sign-in failed: No account returned")
+                    Result.failure(Exception("No account returned"))
+                }
             } else {
-                _authState.value = AuthState.Error("Sign-in failed: No account returned")
-                Result.failure(Exception("No account returned"))
+                val exception = task.exception
+                val errorMessage = when (exception) {
+                    is com.google.android.gms.common.api.ApiException -> {
+                        val statusCode = exception.statusCode
+                        android.util.Log.e("GoogleDriveAuth", "Sign-in failed with status code: $statusCode")
+                        when (statusCode) {
+                            12500 -> "Sign-in cancelled or failed. Please check your Google Play Services."
+                            12501 -> "Sign-in was cancelled by user."
+                            12502 -> "Sign-in is currently in progress."
+                            10 -> "Developer error: Check OAuth configuration in Google Cloud Console."
+                            else -> "Sign-in failed with code $statusCode: ${exception.message}"
+                        }
+                    }
+                    else -> "Sign-in failed: ${exception?.message ?: "Unknown error"}"
+                }
+                android.util.Log.e("GoogleDriveAuth", errorMessage, exception)
+                _authState.value = AuthState.Error(errorMessage)
+                Result.failure(exception ?: Exception(errorMessage))
             }
+        } catch (e: com.google.android.gms.common.api.ApiException) {
+            val errorMessage = "Sign-in failed (code ${e.statusCode}): ${e.message}"
+            android.util.Log.e("GoogleDriveAuth", errorMessage, e)
+            _authState.value = AuthState.Error(errorMessage)
+            Result.failure(e)
         } catch (e: Exception) {
+            android.util.Log.e("GoogleDriveAuth", "Sign-in exception", e)
             _authState.value = AuthState.Error("Sign-in failed: ${e.message}")
             Result.failure(e)
         }

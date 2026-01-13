@@ -10,6 +10,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.ospdf.reader.ui.browser.FileBrowserScreen
+import com.ospdf.reader.ui.cloud.CloudSyncRoute
 import com.ospdf.reader.ui.reader.ReaderScreen
 import com.ospdf.reader.ui.settings.SettingsScreen
 import java.net.URLDecoder
@@ -23,6 +24,7 @@ object Routes {
     const val FILE_BROWSER = "file_browser"
     const val READER = "reader/{fileUri}"
     const val SETTINGS = "settings"
+    const val CLOUD_SYNC = "cloud_sync"
     
     fun reader(fileUri: String): String {
         val encodedUri = URLEncoder.encode(fileUri, StandardCharsets.UTF_8.toString())
@@ -58,6 +60,9 @@ fun AppNavigation(
                 },
                 onSettingsClick = {
                     navController.navigate(Routes.SETTINGS)
+                },
+                onOpenFromDriveClick = {
+                    navController.navigate(Routes.CLOUD_SYNC)
                 }
             )
         }
@@ -79,8 +84,21 @@ fun AppNavigation(
         
         composable(Routes.SETTINGS) {
             SettingsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onCloudSyncClick = { navController.navigate(Routes.CLOUD_SYNC) }
+            )
+        }
+        
+        composable(Routes.CLOUD_SYNC) {
+            CloudSyncRoute(
+                onBack = { navController.popBackStack() },
+                onOpenFile = { uri ->
+                    navController.navigate(Routes.reader(uri.toString())) {
+                        popUpTo(Routes.CLOUD_SYNC) { inclusive = true }
+                    }
+                }
             )
         }
     }
 }
+

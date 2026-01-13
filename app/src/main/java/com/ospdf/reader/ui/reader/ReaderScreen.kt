@@ -36,8 +36,10 @@ import com.ospdf.reader.domain.model.AnnotationTool
 import com.ospdf.reader.domain.model.ReadingMode
 import com.ospdf.reader.ui.components.FloatingAnnotationToolbar
 import com.ospdf.reader.ui.components.InkingCanvas
+import com.ospdf.reader.ui.components.SearchBar
 import com.ospdf.reader.ui.tools.LassoSelectionCanvas
 import com.ospdf.reader.ui.tools.ShapeCanvas
+import com.ospdf.reader.data.pdf.SearchResult
 import kotlinx.coroutines.launch
 
 /**
@@ -77,9 +79,16 @@ fun ReaderScreen(
         pageCount = { uiState.pageCount }
     )
     
-    // Sync pager with viewmodel
+    // Sync pager with viewmodel (bidirectional)
     LaunchedEffect(pagerState.currentPage) {
         viewModel.onPageChanged(pagerState.currentPage)
+    }
+    
+    // Sync pager when viewmodel currentPage changes (from search navigation)
+    LaunchedEffect(uiState.currentPage) {
+        if (pagerState.currentPage != uiState.currentPage) {
+            pagerState.animateScrollToPage(uiState.currentPage)
+        }
     }
     
     // Show/hide UI controls
@@ -98,8 +107,28 @@ fun ReaderScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
+            // Search bar (shown when search is active)
             AnimatedVisibility(
-                visible = showControls && !uiState.showAnnotationToolbar,
+                visible = uiState.showSearch,
+                enter = fadeIn() + slideInVertically(),
+                exit = fadeOut() + slideOutVertically()
+            ) {
+                SearchBar(
+                    query = uiState.searchQuery,
+                    onQueryChange = { viewModel.performSearch(it) },
+                    onSearch = { viewModel.performSearch(it) },
+                    onPrevious = { viewModel.goToPreviousResult() },
+                    onNext = { viewModel.goToNextResult() },
+                    onClose = { viewModel.toggleSearch() },
+                    resultCount = uiState.searchResults.size,
+                    currentIndex = uiState.currentSearchIndex,
+                    isSearching = uiState.isSearching
+                )
+            }
+            
+            // Normal top bar (hidden during search)
+            AnimatedVisibility(
+                visible = showControls && !uiState.showAnnotationToolbar && !uiState.showSearch,
                 enter = fadeIn() + slideInVertically(),
                 exit = fadeOut() + slideOutVertically()
             ) {
@@ -179,6 +208,9 @@ fun ReaderScreen(
                                         panOffset = newOffset
                                     },
                                     isZoomed = isZoomed,
+                                    searchResults = uiState.searchResults.filter { it.pageNumber == pageIndex },
+                                    currentSearchIndex = uiState.currentSearchIndex,
+                                    allSearchResults = uiState.searchResults,
                                     onTap = { showControls = !showControls }
                                 )
                             }
@@ -201,6 +233,9 @@ fun ReaderScreen(
                                         panOffset = newOffset
                                     },
                                     isZoomed = isZoomed,
+                                    searchResults = uiState.searchResults.filter { it.pageNumber == pageIndex },
+                                    currentSearchIndex = uiState.currentSearchIndex,
+                                    allSearchResults = uiState.searchResults,
                                     onTap = { showControls = !showControls }
                                 )
                             }
@@ -302,6 +337,9 @@ private fun PdfPageWithAnnotations(
     panOffset: Offset,
     onZoomChange: (Float, Offset) -> Unit,
     isZoomed: Boolean,
+    searchResults: List<SearchResult> = emptyList(),
+    currentSearchIndex: Int = -1,
+    allSearchResults: List<SearchResult> = emptyList(),
     onTap: () -> Unit
 ) {
     val bitmap by viewModel.getPageBitmap(pageIndex).collectAsState(initial = null)
@@ -454,6 +492,49 @@ private fun PdfPageWithAnnotations(
                     modifier = Modifier.size(48.dp),
                     color = Color.White.copy(alpha = 0.5f)
                 )
+            }
+            
+            // Draw search result highlights
+            if (searchResults.isNotEmpty()) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    searchResults.forEachIndexed { localIndex, result ->
+                        val quad = result.bounds
+                        // Convert from PDF coordinates to screen coordinates
+                        // MuPDF Quad has ul_x, ul_y, ur_x, ur_y, ll_x, ll_y, lr_x, lr_y
+                        val left = quad.ul_x * renderScale * fitScale + imageLeft
+                        val top = quad.ul_y * renderScale * fitScale + imageTop
+                        val right = quad.lr_x * renderScale * fitScale + imageLeft
+                        val bottom = quad.lr_y * renderScale * fitScale + imageTop
+                        
+                        // Find if this is the current result globally
+                        val globalIndex = allSearchResults.indexOfFirst { 
+                            it.pageNumber == result.pageNumber && 
+                            it.bounds.ul_x == result.bounds.ul_x &&
+                            it.bounds.ul_y == result.bounds.ul_y
+                        }
+                        val isCurrentResult = globalIndex == currentSearchIndex
+                        
+                        // Draw yellow highlight for all results
+                        drawRect(
+                            color = if (isCurrentResult) 
+                                Color(0xFFFFA000).copy(alpha = 0.5f) // Orange for current
+                            else 
+                                Color.Yellow.copy(alpha = 0.35f), // Yellow for others
+                            topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                            size = androidx.compose.ui.geometry.Size(right - left, bottom - top)
+                        )
+                        
+                        // Draw border for current result
+                        if (isCurrentResult) {
+                            drawRect(
+                                color = Color(0xFFE65100),
+                                topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                                size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+                            )
+                        }
+                    }
+                }
             }
             
             // Always render existing shapes (disabled canvas just draws, no input)

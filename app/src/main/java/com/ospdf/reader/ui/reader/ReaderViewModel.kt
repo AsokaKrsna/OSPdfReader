@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ospdf.reader.data.pdf.AnnotationManager
 import com.ospdf.reader.data.pdf.MuPdfRenderer
+import com.ospdf.reader.data.pdf.SearchResult
 import com.ospdf.reader.data.cloud.GoogleDriveSync
 import com.ospdf.reader.data.preferences.PreferencesManager
 import com.ospdf.reader.domain.model.AnnotationTool
@@ -49,6 +50,10 @@ data class ReaderUiState(
     val successMessage: String? = null,
     val toolState: ToolState = ToolState(),
     val showSearch: Boolean = false,
+    val searchQuery: String = "",
+    val searchResults: List<SearchResult> = emptyList(),
+    val currentSearchIndex: Int = -1,
+    val isSearching: Boolean = false,
     val showBookmarks: Boolean = false,
     val showMoreMenu: Boolean = false,
     val showAnnotationToolbar: Boolean = false,
@@ -756,7 +761,114 @@ class ReaderViewModel @Inject constructor(
     // -------------------- UI State Toggles --------------------
     
     fun toggleSearch() {
-        _uiState.update { it.copy(showSearch = !it.showSearch) }
+        _uiState.update { 
+            if (it.showSearch) {
+                // Closing search - clear results
+                it.copy(
+                    showSearch = false,
+                    searchQuery = "",
+                    searchResults = emptyList(),
+                    currentSearchIndex = -1
+                )
+            } else {
+                it.copy(showSearch = true)
+            }
+        }
+    }
+    
+    /**
+     * Performs a search across all pages.
+     */
+    fun performSearch(query: String) {
+        if (query.isBlank()) {
+            _uiState.update { 
+                it.copy(
+                    searchQuery = "",
+                    searchResults = emptyList(),
+                    currentSearchIndex = -1,
+                    isSearching = false
+                )
+            }
+            return
+        }
+        
+        _uiState.update { 
+            it.copy(
+                searchQuery = query,
+                isSearching = true
+            )
+        }
+        
+        viewModelScope.launch {
+            val results = pdfRenderer.searchText(query)
+            _uiState.update { 
+                it.copy(
+                    searchResults = results,
+                    currentSearchIndex = if (results.isNotEmpty()) 0 else -1,
+                    isSearching = false
+                )
+            }
+            
+            // Navigate to first result
+            if (results.isNotEmpty()) {
+                goToSearchResult(0)
+            }
+        }
+    }
+    
+    /**
+     * Goes to the next search result.
+     */
+    fun goToNextResult() {
+        val state = _uiState.value
+        if (state.searchResults.isEmpty()) return
+        
+        val nextIndex = (state.currentSearchIndex + 1) % state.searchResults.size
+        goToSearchResult(nextIndex)
+    }
+    
+    /**
+     * Goes to the previous search result.
+     */
+    fun goToPreviousResult() {
+        val state = _uiState.value
+        if (state.searchResults.isEmpty()) return
+        
+        val prevIndex = if (state.currentSearchIndex <= 0) {
+            state.searchResults.size - 1
+        } else {
+            state.currentSearchIndex - 1
+        }
+        goToSearchResult(prevIndex)
+    }
+    
+    /**
+     * Navigates to a specific search result.
+     */
+    private fun goToSearchResult(index: Int) {
+        val state = _uiState.value
+        if (index < 0 || index >= state.searchResults.size) return
+        
+        val result = state.searchResults[index]
+        _uiState.update { 
+            it.copy(
+                currentSearchIndex = index,
+                currentPage = result.pageNumber
+            )
+        }
+    }
+    
+    /**
+     * Clears search results.
+     */
+    fun clearSearch() {
+        _uiState.update { 
+            it.copy(
+                searchQuery = "",
+                searchResults = emptyList(),
+                currentSearchIndex = -1
+            )
+        }
     }
     
     fun toggleBookmarks() {

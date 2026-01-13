@@ -13,6 +13,7 @@ import com.ospdf.reader.data.local.PdfReaderDatabase
 import com.ospdf.reader.data.local.RecentDocumentDao
 import com.ospdf.reader.data.local.RecentDocumentsRepository
 import com.ospdf.reader.data.local.ShapeAnnotationDao
+import com.ospdf.reader.data.local.SyncedDocumentDao
 import com.ospdf.reader.data.ocr.OcrEngine
 import com.ospdf.reader.data.pdf.AnnotationManager
 import com.ospdf.reader.data.pdf.HyperlinkHandler
@@ -41,7 +42,10 @@ object AppModule {
             context,
             PdfReaderDatabase::class.java,
             "pdf_reader_db"
-        ).addMigrations(PdfReaderDatabase.MIGRATION_2_3)
+        ).addMigrations(
+            PdfReaderDatabase.MIGRATION_2_3,
+            PdfReaderDatabase.MIGRATION_3_4
+        )
         .fallbackToDestructiveMigrationOnDowngrade()
         .build()
     }
@@ -69,6 +73,11 @@ object AppModule {
     @Provides
     fun provideShapeAnnotationDao(database: PdfReaderDatabase): ShapeAnnotationDao {
         return database.shapeAnnotationDao()
+    }
+    
+    @Provides
+    fun provideSyncedDocumentDao(database: PdfReaderDatabase): SyncedDocumentDao {
+        return database.syncedDocumentDao()
     }
     
     @Provides
@@ -151,5 +160,18 @@ object AppModule {
         annotationManager: AnnotationManager
     ): PdfExporter {
         return PdfExporter(context, annotationManager)
+    }
+    
+    @Provides
+    @Singleton
+    fun provideSyncRepository(
+        @ApplicationContext context: Context,
+        syncedDocumentDao: SyncedDocumentDao,
+        driveSync: GoogleDriveSync,
+        driveAuth: GoogleDriveAuth
+    ): com.ospdf.reader.data.sync.SyncRepository {
+        return com.ospdf.reader.data.sync.SyncRepository(
+            context, syncedDocumentDao, driveSync, driveAuth
+        )
     }
 }
