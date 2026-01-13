@@ -291,16 +291,19 @@ class AnnotationManager @Inject constructor(
                 
                 // FLIP Y-COORDINATE: PDF origin is Bottom-Left, App is Top-Left
                 // Using bounds.y1 - y to flip.
-                
-                val points = stroke.points
+                // Using bounds.y1 - y to flip.
+            // DRIFT CORRECTION: Adjusted to +8f per user feedback.
+            val driftCorrection = 8f
+            
+            val points = stroke.points
                 val startX = points[0].x + bounds.x0
-                val startY = bounds.y1 - points[0].y
+                val startY = bounds.y1 - points[0].y + driftCorrection
                 
                 contentBuffer.append("${fmt(startX)} ${fmt(startY)} m ")
                 
                 for (i in 1 until points.size) {
                     val px = points[i].x + bounds.x0
-                    val py = bounds.y1 - points[i].y
+                    val py = bounds.y1 - points[i].y + driftCorrection
                     contentBuffer.append("${fmt(px)} ${fmt(py)} l ")
                 }
                 
@@ -320,15 +323,16 @@ class AnnotationManager @Inject constructor(
                 
                 val shapePoints = getPointsForShape(shape)
                 if (shapePoints.isNotEmpty()) {
-                    val start = shapePoints[0]
+                val driftCorrection = 8f
+                val start = shapePoints[0]
                     val sX = start.x + bounds.x0
-                    val sY = bounds.y1 - start.y
+                    val sY = bounds.y1 - start.y + driftCorrection
                     contentBuffer.append("${fmt(sX)} ${fmt(sY)} m ")
                     
                     for (i in 1 until shapePoints.size) {
                         val p = shapePoints[i]
                         val pX = p.x + bounds.x0
-                        val pY = bounds.y1 - p.y
+                        val pY = bounds.y1 - p.y + driftCorrection
                         contentBuffer.append("${fmt(pX)} ${fmt(pY)} l ")
                     }
                     
@@ -577,31 +581,34 @@ class AnnotationManager @Inject constructor(
             resources!!.put("ExtGState", extGState)
         }
         
-        // Create a unique key for this alpha state, e.g., "GS_A0.4"
-        // sanitize dot to underscore just in case. PDF names shouldn't have dots ideally.
-        val nameStr = "GS_A${alpha}".replace(".", "_")
+        // Create a simple alphanumeric key
+        // e.g. "GSA50" for alpha 0.5
+        val alphaInt = (alpha * 100).toInt()
+        val key = "GSA$alphaInt"
         
-        // Check if it already exists
-        if (extGState!!.get(nameStr) == null) {
-            val transparencyDict = document.newDictionary()
-            transparencyDict.put("Type", document.newName("ExtGState"))
+        // Debug check
+        if (extGState!!.get(key) == null) {
+            val dict = document.newDictionary()
+            dict.put("Type", document.newName("ExtGState"))
             
-            // Use newReal() to properly create PDF real number objects for alpha
-            val caReal = document.newReal(alpha)
-            transparencyDict.put("CA", caReal) // Stroke alpha
-            transparencyDict.put("ca", document.newReal(alpha)) // Fill alpha
+            if (alpha < 1f) {
+                // Set alpha values
+                dict.put("CA", document.newReal(alpha))
+                dict.put("ca", document.newReal(alpha))
+                
+                // Use Multiply blending
+                dict.put("BM", document.newName("Multiply"))
+            }
             
-            // Use Normal blend mode with alpha for true translucency
-            // This lets underlying text show through the highlighter
-            transparencyDict.put("BM", document.newName("Normal"))
+            // Add to resources immediately
+            extGState.put(key, dict)
             
-            android.util.Log.d("AnnotationManager", "Created ExtGState: CA=${transparencyDict.get("CA")}, ca=${transparencyDict.get("ca")}, BM=${transparencyDict.get("BM")}")
-            
-            extGState!!.put(nameStr, transparencyDict)
-            android.util.Log.d("AnnotationManager", "Added $nameStr to ExtGState")
+            android.util.Log.d("AnnotationManager", "Created ExtGState: $key (CA=$alpha, BM=Multiply)")
+        } else {
+             android.util.Log.d("AnnotationManager", "Reusing existing ExtGState: $key")
         }
         
-        return nameStr
+        return key
     }
 
     /**
@@ -610,27 +617,21 @@ class AnnotationManager @Inject constructor(
      */
     private fun ensureTransparencyGroup(document: PDFDocument, pageObj: PDFObject) {
         try {
-            // Check if Group already exists
-            val existingGroup = pageObj.get("Group")
-            if (existingGroup != null && !existingGroup.isNull) {
-                android.util.Log.d("AnnotationManager", "Page already has Group dictionary")
-                return
-            }
+            // Force update/create the Group dictionary
             
-            // Create transparency group
             val group = document.newDictionary()
             group.put("Type", document.newName("Group"))
             group.put("S", document.newName("Transparency"))
-            group.put("I", true)  // Isolated - content doesn't blend with backdrop
-            group.put("K", false) // Knockout - later objects don't knock out earlier ones
-            
-            // Set color space
-            group.put("CS", document.newName("DeviceRGB"))
+            group.put("I", true) // Isolated
+            group.put("K", false) // Knockout false
+            // Simplified: Removing explicit CS (ColorSpace) to avoid potential mismatch with DeviceGray/CMYK documents
+            // The viewer should handle blending in current context
             
             pageObj.put("Group", group)
-            android.util.Log.d("AnnotationManager", "Added transparency Group to page")
+            android.util.Log.d("AnnotationManager", "Forcing transparency Group: S=Transparency, I=true")
+            
         } catch (e: Exception) {
-            android.util.Log.e("AnnotationManager", "Failed to add transparency group", e)
+            android.util.Log.e("AnnotationManager", "Error ensuring transparency group", e)
         }
     }
 
