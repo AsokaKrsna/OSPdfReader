@@ -252,12 +252,13 @@ class AnnotationManager @Inject constructor(
             }
             
             // Check if we need transparency (highlighters)
+            // When making annotations permanent, highlights should remain transparent
             val hasHighlighters = strokes.any { it.isHighlighter }
             var highlightGsName = ""
             
             if (hasHighlighters) {
-                // Use 0.5f alpha for translucent highlighter effect
-                highlightGsName = ensureTransparencyResource(document, pageObj, 0.5f)
+                // Use 0.4f alpha to match temporary annotation opacity
+                highlightGsName = ensureTransparencyResource(document, pageObj, 0.4f)
                 android.util.Log.d("AnnotationManager", "Created transparency resource: $highlightGsName")
                 
                 // Ensure page has a transparency group for blending to work
@@ -275,6 +276,9 @@ class AnnotationManager @Inject constructor(
             for (stroke in strokes) {
                 if (stroke.points.isEmpty()) continue
                 
+                // Save graphics state for this stroke (needed for proper transparency isolation)
+                contentBuffer.append("q ")
+                
                 // Set color
                 val r = fmt(stroke.color.red)
                 val g = fmt(stroke.color.green)
@@ -284,18 +288,17 @@ class AnnotationManager @Inject constructor(
                 // Set line width
                 contentBuffer.append("${fmt(stroke.strokeWidth)} w ")
                 
-                // Set transparency state if needed
+                // Set transparency state for highlighters to keep them translucent when permanent
                 if (stroke.isHighlighter && highlightGsName.isNotEmpty()) {
                     contentBuffer.append("/$highlightGsName gs ")
                 }
                 
                 // FLIP Y-COORDINATE: PDF origin is Bottom-Left, App is Top-Left
                 // Using bounds.y1 - y to flip.
-                // Using bounds.y1 - y to flip.
-            // DRIFT CORRECTION: Adjusted to +8f per user feedback.
-            val driftCorrection = 8f
-            
-            val points = stroke.points
+                // DRIFT CORRECTION: Adjusted to +8f per user feedback.
+                val driftCorrection = 8f
+                
+                val points = stroke.points
                 val startX = points[0].x + bounds.x0
                 val startY = bounds.y1 - points[0].y + driftCorrection
                 
@@ -308,6 +311,9 @@ class AnnotationManager @Inject constructor(
                 }
                 
                 contentBuffer.append("S ") // Stroke path
+                
+                // Restore graphics state for this stroke
+                contentBuffer.append("Q ")
             }
             
             // 2. Draw shapes
@@ -586,27 +592,24 @@ class AnnotationManager @Inject constructor(
         val alphaInt = (alpha * 100).toInt()
         val key = "GSA$alphaInt"
         
-        // Debug check
-        if (extGState!!.get(key) == null) {
-            val dict = document.newDictionary()
-            dict.put("Type", document.newName("ExtGState"))
+        // Always create/update the ExtGState to ensure correct properties
+        // Don't reuse existing ones that might have been created with wrong settings
+        val dict = document.newDictionary()
+        dict.put("Type", document.newName("ExtGState"))
+        
+        if (alpha < 1f) {
+            // Set alpha values
+            dict.put("CA", document.newReal(alpha))
+            dict.put("ca", document.newReal(alpha))
             
-            if (alpha < 1f) {
-                // Set alpha values
-                dict.put("CA", document.newReal(alpha))
-                dict.put("ca", document.newReal(alpha))
-                
-                // Use Multiply blending
-                dict.put("BM", document.newName("Multiply"))
-            }
-            
-            // Add to resources immediately
-            extGState.put(key, dict)
-            
-            android.util.Log.d("AnnotationManager", "Created ExtGState: $key (CA=$alpha, BM=Multiply)")
-        } else {
-             android.util.Log.d("AnnotationManager", "Reusing existing ExtGState: $key")
+            // Use Multiply blending for highlighter effect
+            dict.put("BM", document.newName("Multiply"))
         }
+        
+        // Add/replace in resources
+        extGState!!.put(key, dict)
+        
+        android.util.Log.d("AnnotationManager", "Set ExtGState: $key (CA=$alpha, BM=Multiply)")
         
         return key
     }
@@ -622,13 +625,15 @@ class AnnotationManager @Inject constructor(
             val group = document.newDictionary()
             group.put("Type", document.newName("Group"))
             group.put("S", document.newName("Transparency"))
-            group.put("I", true) // Isolated
+            // I=false (non-isolated) is required for Multiply blend mode to work
+            // correctly with underlying page content (text, images)
+            group.put("I", false)
             group.put("K", false) // Knockout false
-            // Simplified: Removing explicit CS (ColorSpace) to avoid potential mismatch with DeviceGray/CMYK documents
-            // The viewer should handle blending in current context
+            // Use DeviceRGB for consistent color blending
+            group.put("CS", document.newName("DeviceRGB"))
             
             pageObj.put("Group", group)
-            android.util.Log.d("AnnotationManager", "Forcing transparency Group: S=Transparency, I=true")
+            android.util.Log.d("AnnotationManager", "Set transparency Group: S=Transparency, I=false, CS=DeviceRGB")
             
         } catch (e: Exception) {
             android.util.Log.e("AnnotationManager", "Error ensuring transparency group", e)
@@ -969,6 +974,7 @@ class AnnotationManager @Inject constructor(
                 // Build content stream additions for baked annotations
                 val contentAdditions = StringBuilder()
                 val annotsToRemove = mutableListOf<Int>()
+                var hasTransparentAnnotations = false
                 
                 for (i in 0 until annots.size()) {
                     try {
@@ -1001,6 +1007,16 @@ class AnnotationManager @Inject constructor(
                         }
                         
                         android.util.Log.d("AnnotationManager", "Page $pageIndex, Annot $i: Found valid AP stream, will flatten")
+                        
+                        // Get annotation opacity (CA = stroke alpha, ca = fill alpha)
+                        // This is critical for highlighters which have opacity < 1
+                        val caVal = annot.get("CA")
+                        val annotOpacity = if (caVal != null && !caVal.isNull) {
+                            try { caVal.asFloat() } catch (e: Exception) { 1f }
+                        } else {
+                            1f
+                        }
+                        android.util.Log.d("AnnotationManager", "Page $pageIndex, Annot $i: opacity=$annotOpacity")
                         
                         // Get annotation rectangle
                         val rect = annot.get("Rect")
@@ -1070,6 +1086,15 @@ class AnnotationManager @Inject constructor(
                         
                         // Add drawing commands to content stream
                         contentAdditions.append("q ")
+                        
+                        // If annotation has transparency (e.g., highlighter), apply graphics state
+                        if (annotOpacity < 1f) {
+                            hasTransparentAnnotations = true
+                            val gsName = ensureTransparencyResource(document, pageObj, annotOpacity)
+                            contentAdditions.append("/$gsName gs ")
+                            android.util.Log.d("AnnotationManager", "Page $pageIndex, Annot $i: Applied transparency GS: $gsName")
+                        }
+                        
                         contentAdditions.append("$scaleX 0 0 $scaleY $translateX $translateY cm ")
                         contentAdditions.append("/$xobjName Do ")
                         contentAdditions.append("Q\n")
@@ -1079,6 +1104,11 @@ class AnnotationManager @Inject constructor(
                         e.printStackTrace()
                         // Continue with next annotation
                     }
+                }
+                
+                // Ensure transparency group is set on page if we have transparent annotations
+                if (hasTransparentAnnotations) {
+                    ensureTransparencyGroup(document, pageObj)
                 }
                 
                 // Append content to page
