@@ -41,7 +41,8 @@ object AppModule {
             context,
             PdfReaderDatabase::class.java,
             "pdf_reader_db"
-        ).fallbackToDestructiveMigrationOnDowngrade()
+        ).addMigrations(PdfReaderDatabase.MIGRATION_2_3)
+        .fallbackToDestructiveMigrationOnDowngrade()
         .build()
     }
     

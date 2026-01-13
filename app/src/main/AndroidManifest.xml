@@ -9,6 +9,10 @@
         android:maxSdkVersion="29"
         tools:ignore="ScopedStorage" />
     
+    <!-- All Files Access for Android 11+ (document management app) -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    
     <!-- For Android 13+ media access -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     
@@ -35,6 +39,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.OSPdfReader"
         android:largeHeap="true"
+        android:requestLegacyExternalStorage="true"
         tools:targetApi="34">
         
         <!-- Main Activity -->

@@ -163,6 +163,8 @@ class ReaderViewModel @Inject constructor(
      * Loads a PDF document from a URI.
      */
     fun loadDocument(uri: Uri) {
+        android.util.Log.d("ReaderViewModel", "loadDocument called with URI: $uri")
+        
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             
@@ -170,6 +172,8 @@ class ReaderViewModel @Inject constructor(
                 onSuccess = { document ->
                     currentDocumentPath = document.path
                     currentDocumentUri = uri
+                    android.util.Log.d("ReaderViewModel", "Document loaded. currentDocumentUri=$currentDocumentUri, path=${document.path}")
+                    
                     // Record recent open
                     viewModelScope.launch(Dispatchers.IO) {
                         recentDocumentsRepository.recordOpen(

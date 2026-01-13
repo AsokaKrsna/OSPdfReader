@@ -165,6 +165,9 @@ data class RecentDocumentEntity(
     @ColumnInfo(name = "path")
     val path: String,
     
+    @ColumnInfo(name = "original_uri", defaultValue = "")
+    val originalUri: String = "",  // Original content:// or file:// URI
+    
     @ColumnInfo(name = "name")
     val name: String,
     
@@ -315,7 +318,7 @@ interface ShapeAnnotationDao {
         InkAnnotationEntity::class,
         ShapeAnnotationEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class PdfReaderDatabase : RoomDatabase() {
@@ -324,4 +327,15 @@ abstract class PdfReaderDatabase : RoomDatabase() {
     abstract fun recentDocumentDao(): RecentDocumentDao
     abstract fun inkAnnotationDao(): InkAnnotationDao
     abstract fun shapeAnnotationDao(): ShapeAnnotationDao
+    
+    companion object {
+        /**
+         * Migration from version 2 to 3: Add original_uri column to recent_documents table.
+         */
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE recent_documents ADD COLUMN original_uri TEXT NOT NULL DEFAULT ''")
+            }
+        }
+    }
 }

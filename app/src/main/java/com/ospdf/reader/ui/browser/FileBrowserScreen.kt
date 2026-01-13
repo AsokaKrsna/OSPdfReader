@@ -2,6 +2,9 @@ package com.ospdf.reader.ui.browser
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -34,6 +37,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+
 /**
  * File browser screen for selecting PDF files.
  * Features a modern, minimal design with gradient accents.
@@ -48,24 +52,100 @@ fun FileBrowserScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     
+    // Check if we have All Files Access permission
+    fun hasAllFilesAccess(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            true // Not needed on older Android versions
+        }
+    }
+    
+    var showPermissionDialog by remember { mutableStateOf(!hasAllFilesAccess()) }
+    
+    // Permission dialog for All Files Access
+    if (showPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDialog = false },
+            icon = {
+                Icon(
+                    Icons.Filled.FolderOpen,
+                    contentDescription = null,
+                    tint = Primary,
+                    modifier = Modifier.size(48.dp)
+                )
+            },
+            title = { Text("File Access Required") },
+            text = { 
+                Text(
+                    "OSPdfReader needs access to manage all files to read and save PDFs. " +
+                    "Please grant 'All files access' permission in the next screen."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPermissionDialog = false
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            try {
+                                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                // Fallback for devices that don't support this intent
+                                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                context.startActivity(intent)
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) {
+                    Text("Grant Access")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDialog = false }) {
+                    Text("Later")
+                }
+            }
+        )
+    }
+    
     // File picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let { selectedUri ->
-            // Copy file to cache immediately while we still have permission
-            val cacheUri = copyFileToCache(context, selectedUri)
-            val finalUri = cacheUri ?: selectedUri
+            // Try to get the actual file path for direct access
+            val filePath = getFilePathFromUri(context, selectedUri)
+            
+            val finalUri = if (hasAllFilesAccess() && filePath != null && java.io.File(filePath).exists()) {
+                // We have All Files Access and found the real file path - use file:// URI
+                Uri.fromFile(java.io.File(filePath))
+            } else {
+                // Fall back to copying to cache (needed for SAF-only access)
+                copyFileToCache(context, selectedUri) ?: selectedUri
+            }
 
-            // Best-effort persist permission
+            // Best-effort persist permission for reading/writing later
             try {
                 context.contentResolver.takePersistableUriPermission(
                     selectedUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 )
             } catch (_: SecurityException) {
+                // If we can't persist write permission, at least try read-only
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        selectedUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: SecurityException) {
+                }
             }
 
+            // Pass the file URI to navigation
             onFileSelected(finalUri)
         }
     }
@@ -284,6 +364,169 @@ private fun formatDate(timestamp: Long): String {
 }
 
 /**
+ * Gets the real file path from a content:// URI.
+ * Works for Downloads, Documents, and other common locations.
+ */
+@Suppress("DEPRECATION")
+private fun getFilePathFromUri(context: android.content.Context, uri: Uri): String? {
+    android.util.Log.d("FileBrowser", "getFilePathFromUri: uri=$uri, authority=${uri.authority}")
+    
+    // For file:// URIs, just return the path
+    if (uri.scheme == "file") {
+        return uri.path
+    }
+    
+    // For content:// URIs from DocumentsProvider
+    if (uri.authority == "com.android.providers.media.documents") {
+        // MediaDocumentsProvider - format: document:ID or image:ID etc
+        val docId = android.provider.DocumentsContract.getDocumentId(uri)
+        android.util.Log.d("FileBrowser", "MediaDocumentsProvider docId: $docId")
+        
+        val split = docId.split(":")
+        val type = split.getOrNull(0)
+        val id = split.getOrNull(1)
+        
+        if (id != null) {
+            // Query MediaStore for the actual file path
+            val contentUri = when (type) {
+                "image" -> android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                "video" -> android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                "audio" -> android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                "document" -> android.provider.MediaStore.Files.getContentUri("external")
+                else -> android.provider.MediaStore.Files.getContentUri("external")
+            }
+            
+            val selection = "_id=?"
+            val selectionArgs = arrayOf(id)
+            val path = getDataColumn(context, contentUri, selection, selectionArgs)
+            android.util.Log.d("FileBrowser", "MediaStore query result: $path")
+            if (path != null) return path
+        }
+    }
+    
+    if (uri.authority == "com.android.providers.downloads.documents") {
+        // DownloadsProvider
+        val docId = android.provider.DocumentsContract.getDocumentId(uri)
+        android.util.Log.d("FileBrowser", "DownloadsProvider docId: $docId")
+        
+        if (docId.startsWith("raw:")) {
+            return docId.removePrefix("raw:")
+        }
+        
+        // For msf: format (Media Store File)
+        if (docId.startsWith("msf:")) {
+            val id = docId.removePrefix("msf:")
+            val contentUri = android.provider.MediaStore.Files.getContentUri("external")
+            val selection = "_id=?"
+            val selectionArgs = arrayOf(id)
+            val path = getDataColumn(context, contentUri, selection, selectionArgs)
+            if (path != null) return path
+        }
+        
+        // Try numeric ID
+        try {
+            val id = docId.toLongOrNull()
+            if (id != null) {
+                val contentUri = android.content.ContentUris.withAppendedId(
+                    Uri.parse("content://downloads/public_downloads"), id
+                )
+                val path = getDataColumn(context, contentUri, null, null)
+                if (path != null) return path
+            }
+        } catch (_: Exception) {}
+        
+        // Try to find in Downloads folder by filename
+        val fileName = getFileName(context, uri)
+        if (fileName != null) {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val file = java.io.File(downloadsDir, fileName)
+            if (file.exists()) {
+                android.util.Log.d("FileBrowser", "Found file in Downloads: ${file.absolutePath}")
+                return file.absolutePath
+            }
+        }
+    }
+    
+    if (uri.authority == "com.android.externalstorage.documents") {
+        // ExternalStorageProvider
+        val docId = android.provider.DocumentsContract.getDocumentId(uri)
+        val split = docId.split(":")
+        val type = split.getOrNull(0)
+        val relativePath = split.getOrNull(1) ?: ""
+        
+        if ("primary".equals(type, ignoreCase = true)) {
+            return "${Environment.getExternalStorageDirectory().absolutePath}/${relativePath}"
+        }
+    }
+    
+    // Try to get _data column directly (works for some content URIs)
+    val path = getDataColumn(context, uri, null, null)
+    android.util.Log.d("FileBrowser", "Direct _data query result: $path")
+    if (path != null) return path
+    
+    // Last resort: try to find file by display name
+    val fileName = getFileName(context, uri)
+    if (fileName != null) {
+        // Check common locations
+        val locations = listOf(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+            Environment.getExternalStorageDirectory()
+        )
+        for (location in locations) {
+            val file = java.io.File(location, fileName)
+            if (file.exists()) {
+                android.util.Log.d("FileBrowser", "Found file by name in ${location.name}: ${file.absolutePath}")
+                return file.absolutePath
+            }
+        }
+    }
+    
+    android.util.Log.d("FileBrowser", "Failed to get file path for URI")
+    return null
+}
+
+/**
+ * Gets the display name of a file from a URI.
+ */
+private fun getFileName(context: android.content.Context, uri: Uri): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0) cursor.getString(nameIndex) else null
+            } else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/**
+ * Gets the _data column value from a content URI.
+ */
+private fun getDataColumn(
+    context: android.content.Context,
+    uri: Uri,
+    selection: String?,
+    selectionArgs: Array<String>?
+): String? {
+    val column = "_data"
+    val projection = arrayOf(column)
+    
+    return try {
+        context.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val columnIndex = cursor.getColumnIndexOrThrow(column)
+                cursor.getString(columnIndex)
+            } else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/**
  * Copies a content:// URI file to the app's cache directory.
  * Returns the file:// URI of the cached copy, or null if copy failed.
  */
@@ -325,3 +568,4 @@ private fun copyFileToCache(context: android.content.Context, sourceUri: Uri): U
         null
     }
 }
+

@@ -156,16 +156,41 @@ class AnnotationManager @Inject constructor(
                 // Try to write back to original URI
                 var savedToOriginal = false
                 try {
-                    android.util.Log.d("AnnotationManager", "Attempting to write to original URI: $originalUri")
-                    context.contentResolver.openOutputStream(originalUri, "wt")?.use { outputStream ->
-                        tempFile.inputStream().use { inputStream ->
-                            val bytesCopied = inputStream.copyTo(outputStream)
-                            android.util.Log.d("AnnotationManager", "Wrote $bytesCopied bytes to original URI")
+                    android.util.Log.d("AnnotationManager", "Attempting to write to original URI: $originalUri (scheme=${originalUri.scheme})")
+                    
+                    if (originalUri.scheme == "file") {
+                        // For file:// URIs, write directly using FileOutputStream
+                        val filePath = originalUri.path
+                        if (filePath != null) {
+                            val targetFile = File(filePath)
+                            android.util.Log.d("AnnotationManager", "Writing directly to file: $filePath")
+                            tempFile.copyTo(targetFile, overwrite = true)
+                            android.util.Log.d("AnnotationManager", "Wrote ${targetFile.length()} bytes to file")
+                            savedToOriginal = true
+                            
+                            // Notify MediaStore so file managers see the updated file
+                            android.media.MediaScannerConnection.scanFile(
+                                context,
+                                arrayOf(filePath),
+                                arrayOf("application/pdf")
+                            ) { path, uri ->
+                                android.util.Log.d("AnnotationManager", "MediaScanner scanned: $path -> $uri")
+                            }
+                        } else {
+                            android.util.Log.w("AnnotationManager", "file:// URI has null path")
                         }
-                        savedToOriginal = true
-                    }
-                    if (!savedToOriginal) {
-                        android.util.Log.w("AnnotationManager", "openOutputStream returned null for URI")
+                    } else {
+                        // For content:// URIs, use ContentResolver
+                        context.contentResolver.openOutputStream(originalUri, "wt")?.use { outputStream ->
+                            tempFile.inputStream().use { inputStream ->
+                                val bytesCopied = inputStream.copyTo(outputStream)
+                                android.util.Log.d("AnnotationManager", "Wrote $bytesCopied bytes via ContentResolver")
+                            }
+                            savedToOriginal = true
+                        }
+                        if (!savedToOriginal) {
+                            android.util.Log.w("AnnotationManager", "openOutputStream returned null for URI")
+                        }
                     }
                 } catch (e: SecurityException) {
                     // Permission denied - will save to app storage instead
@@ -231,7 +256,12 @@ class AnnotationManager @Inject constructor(
             var highlightGsName = ""
             
             if (hasHighlighters) {
-                highlightGsName = ensureTransparencyResource(document, pageObj, 0.4f)
+                // Use 0.5f alpha for translucent highlighter effect
+                highlightGsName = ensureTransparencyResource(document, pageObj, 0.5f)
+                android.util.Log.d("AnnotationManager", "Created transparency resource: $highlightGsName")
+                
+                // Ensure page has a transparency group for blending to work
+                ensureTransparencyGroup(document, pageObj)
             }
             
             val contentBuffer = StringBuilder()
@@ -555,14 +585,53 @@ class AnnotationManager @Inject constructor(
         if (extGState!!.get(nameStr) == null) {
             val transparencyDict = document.newDictionary()
             transparencyDict.put("Type", document.newName("ExtGState"))
-            transparencyDict.put("CA", alpha) // Stroke alpha
-            transparencyDict.put("ca", alpha) // Fill alpha
-            transparencyDict.put("BM", document.newName("Normal")) // Blend mode
+            
+            // Use newReal() to properly create PDF real number objects for alpha
+            val caReal = document.newReal(alpha)
+            transparencyDict.put("CA", caReal) // Stroke alpha
+            transparencyDict.put("ca", document.newReal(alpha)) // Fill alpha
+            
+            // Use Normal blend mode with alpha for true translucency
+            // This lets underlying text show through the highlighter
+            transparencyDict.put("BM", document.newName("Normal"))
+            
+            android.util.Log.d("AnnotationManager", "Created ExtGState: CA=${transparencyDict.get("CA")}, ca=${transparencyDict.get("ca")}, BM=${transparencyDict.get("BM")}")
             
             extGState!!.put(nameStr, transparencyDict)
+            android.util.Log.d("AnnotationManager", "Added $nameStr to ExtGState")
         }
         
         return nameStr
+    }
+
+    /**
+     * Ensures the page has a transparency Group dictionary.
+     * This is required for alpha blending to work in PDF.
+     */
+    private fun ensureTransparencyGroup(document: PDFDocument, pageObj: PDFObject) {
+        try {
+            // Check if Group already exists
+            val existingGroup = pageObj.get("Group")
+            if (existingGroup != null && !existingGroup.isNull) {
+                android.util.Log.d("AnnotationManager", "Page already has Group dictionary")
+                return
+            }
+            
+            // Create transparency group
+            val group = document.newDictionary()
+            group.put("Type", document.newName("Group"))
+            group.put("S", document.newName("Transparency"))
+            group.put("I", true)  // Isolated - content doesn't blend with backdrop
+            group.put("K", false) // Knockout - later objects don't knock out earlier ones
+            
+            // Set color space
+            group.put("CS", document.newName("DeviceRGB"))
+            
+            pageObj.put("Group", group)
+            android.util.Log.d("AnnotationManager", "Added transparency Group to page")
+        } catch (e: Exception) {
+            android.util.Log.e("AnnotationManager", "Failed to add transparency group", e)
+        }
     }
 
     private fun getPointsForShape(shape: ShapeAnnotation): List<Point> {
@@ -727,6 +796,20 @@ class AnnotationManager @Inject constructor(
             }
             
             annot.update()
+            
+            // Log the Rect that MuPDF calculated for this annotation
+            val annotObj = annot.getObject()
+            val rect = annotObj.get("Rect")
+            if (rect != null && rect.isArray && rect.size() >= 4) {
+                val rx0 = rect.get(0).asFloat()
+                val ry0 = rect.get(1).asFloat()
+                val rx1 = rect.get(2).asFloat()
+                val ry1 = rect.get(3).asFloat()
+                android.util.Log.d("AnnotationManager", "Ink annotation Rect: x0=$rx0, y0=$ry0, x1=$rx1, y1=$ry1")
+                android.util.Log.d("AnnotationManager", "First point input: (${stroke.points[0].x}, ${stroke.points[0].y})")
+                android.util.Log.d("AnnotationManager", "Page bounds: y1=${pageBounds.y1}")
+            }
+            
             android.util.Log.d("AnnotationManager", "Ink annotation updated, generating AP stream...")
             
             // Manually generate appearance stream since MuPDF Java doesn't expose updateAppearance()

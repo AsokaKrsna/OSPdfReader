@@ -22,8 +22,14 @@ class RecentDocumentsRepository @Inject constructor(
     }
 
     private fun RecentDocumentEntity.toDomain(): PdfDocument {
+        // Use original URI if available, otherwise fall back to file path (old records)
+        val uri = if (originalUri.isNotBlank()) {
+            android.net.Uri.parse(originalUri)
+        } else {
+            android.net.Uri.fromFile(java.io.File(path))
+        }
         return PdfDocument(
-            uri = Uri.fromFile(java.io.File(path)),
+            uri = uri,
             name = name,
             path = path,
             pageCount = totalPages,
@@ -36,6 +42,7 @@ class RecentDocumentsRepository @Inject constructor(
     private fun PdfDocument.toEntity(): RecentDocumentEntity {
         return RecentDocumentEntity(
             path = path,
+            originalUri = uri.toString(),  // Store the original URI
             name = name,
             lastPage = currentPage,
             totalPages = pageCount,
