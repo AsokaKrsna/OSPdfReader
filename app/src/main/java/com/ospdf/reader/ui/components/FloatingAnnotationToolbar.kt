@@ -52,13 +52,15 @@ fun FloatingAnnotationToolbar(
     toolState: ToolState,
     canUndo: Boolean,
     canRedo: Boolean,
+    isZoomed: Boolean = false,
     onToolSelected: (AnnotationTool) -> Unit,
     onColorSelected: (Color) -> Unit,
     onStrokeWidthChanged: (Float) -> Unit,
     onShapeTypeSelected: (ShapeType) -> Unit = {},
     onUndo: () -> Unit,
     onRedo: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onResetZoom: () -> Unit = {}
 ) {
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
@@ -181,29 +183,40 @@ fun FloatingAnnotationToolbar(
             // Center FAB
             FloatingActionButton(
                 onClick = { 
-                    isExpanded = !isExpanded
-                    if (!isExpanded) showSecondaryMenu = null
+                    if (isZoomed) {
+                        // Reset zoom when tapped while zoomed
+                        onResetZoom()
+                    } else {
+                        isExpanded = !isExpanded
+                        if (!isExpanded) showSecondaryMenu = null
+                    }
                 },
                 modifier = Modifier
                     .size(fabSizeDp)
                     .shadow(if (isExpanded) 4.dp else 8.dp, CircleShape),
-                containerColor = if (isExpanded) 
-                    MaterialTheme.colorScheme.surface
-                else 
-                    MaterialTheme.colorScheme.primaryContainer,
-                contentColor = if (isExpanded)
-                    MaterialTheme.colorScheme.onSurface
-                else
-                    MaterialTheme.colorScheme.onPrimaryContainer
+                containerColor = when {
+                    isZoomed -> Color(0xFFE57373).copy(alpha = 0.9f) // Reddish when zoomed
+                    isExpanded -> MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                    else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                },
+                contentColor = when {
+                    isZoomed -> Color.White
+                    isExpanded -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.colorScheme.onPrimaryContainer
+                }
             ) {
                 Icon(
-                    imageVector = if (isExpanded) 
-                        Icons.Filled.Close 
-                    else if (toolState.currentTool == AnnotationTool.NONE)
-                        Icons.Filled.Construction
-                    else 
-                        getToolIcon(toolState.currentTool, toolState.shapeType),
-                    contentDescription = if (isExpanded) "Close" else "Annotation tools",
+                    imageVector = when {
+                        isZoomed -> Icons.Filled.ZoomOut // Show zoom-out icon when zoomed
+                        isExpanded -> Icons.Filled.Close 
+                        toolState.currentTool == AnnotationTool.NONE -> Icons.Filled.Construction
+                        else -> getToolIcon(toolState.currentTool, toolState.shapeType)
+                    },
+                    contentDescription = when {
+                        isZoomed -> "Tap to reset zoom"
+                        isExpanded -> "Close"
+                        else -> "Annotation tools"
+                    },
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -398,7 +411,7 @@ private fun ArcToolButton(
     onClick: () -> Unit
 ) {
     val backgroundColor = when {
-        isSelected -> MaterialTheme.colorScheme.primaryContainer
+        isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
         else -> Color.Transparent
     }
     

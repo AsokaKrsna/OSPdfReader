@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -87,9 +88,12 @@ fun ReaderScreen(
     // Disable page scrolling when any annotation tool is active
     val isAnnotationMode = uiState.toolState.currentTool != AnnotationTool.NONE
     
-    // Zoom temporarily disabled to simplify annotation alignment
-    val zoomLevel = 1f
-    val zoomOffset = Offset.Zero
+    // Zoom state - shared across pages
+    var zoomLevel by remember { mutableFloatStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+    
+    // Annotations are disabled when zoomed in
+    val isZoomed = zoomLevel > 1.05f
     
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -162,12 +166,19 @@ fun ReaderScreen(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize(),
                                 // Allow finger scrolling - stylus only for annotations
-                                userScrollEnabled = true
+                                userScrollEnabled = zoomLevel <= 1.05f // Disable paging when zoomed
                             ) { pageIndex ->
                                 PdfPageWithAnnotations(
                                     pageIndex = pageIndex,
                                     viewModel = viewModel,
                                     toolState = uiState.toolState,
+                                    zoomLevel = zoomLevel,
+                                    panOffset = panOffset,
+                                    onZoomChange = { newZoom, newOffset ->
+                                        zoomLevel = newZoom.coerceIn(1f, 5f)
+                                        panOffset = newOffset
+                                    },
+                                    isZoomed = isZoomed,
                                     onTap = { showControls = !showControls }
                                 )
                             }
@@ -177,12 +188,19 @@ fun ReaderScreen(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize(),
                                 // Allow finger scrolling - stylus only for annotations
-                                userScrollEnabled = true
+                                userScrollEnabled = zoomLevel <= 1.05f
                             ) { pageIndex ->
                                 PdfPageWithAnnotations(
                                     pageIndex = pageIndex,
                                     viewModel = viewModel,
                                     toolState = uiState.toolState,
+                                    zoomLevel = zoomLevel,
+                                    panOffset = panOffset,
+                                    onZoomChange = { newZoom, newOffset ->
+                                        zoomLevel = newZoom.coerceIn(1f, 5f)
+                                        panOffset = newOffset
+                                    },
+                                    isZoomed = isZoomed,
                                     onTap = { showControls = !showControls }
                                 )
                             }
@@ -229,13 +247,18 @@ fun ReaderScreen(
                             toolState = uiState.toolState,
                             canUndo = uiState.canUndo,
                             canRedo = uiState.canRedo,
+                            isZoomed = isZoomed,
                             onToolSelected = { viewModel.setTool(it) },
                             onColorSelected = { viewModel.setColor(it) },
                             onStrokeWidthChanged = { viewModel.setStrokeWidth(it) },
                             onShapeTypeSelected = { viewModel.setShapeType(it) },
                             onUndo = { viewModel.undo() },
                             onRedo = { viewModel.redo() },
-                            onClose = { viewModel.closeAnnotationMode() }
+                            onClose = { viewModel.closeAnnotationMode() },
+                            onResetZoom = {
+                                zoomLevel = 1f
+                                panOffset = Offset.Zero
+                            }
                         )
                     }
                     
@@ -275,6 +298,10 @@ private fun PdfPageWithAnnotations(
     pageIndex: Int,
     viewModel: ReaderViewModel,
     toolState: com.ospdf.reader.domain.model.ToolState,
+    zoomLevel: Float,
+    panOffset: Offset,
+    onZoomChange: (Float, Offset) -> Unit,
+    isZoomed: Boolean,
     onTap: () -> Unit
 ) {
     val bitmap by viewModel.getPageBitmap(pageIndex).collectAsState(initial = null)
@@ -361,20 +388,39 @@ private fun PdfPageWithAnnotations(
             )
         }
     }
+    
+    // Effective tool - disable annotations when zoomed
+    val effectiveTool = if (isZoomed) AnnotationTool.NONE else toolState.currentTool
+    
+    // Transformable state for smoother pinch-to-zoom
+    val transformableState = rememberTransformableState { zoomChange, offsetChange, _ ->
+        val newZoom = (zoomLevel * zoomChange).coerceIn(1f, 5f)
+        val maxPanX = (containerSize.width * (newZoom - 1)) / 2
+        val maxPanY = (containerSize.height * (newZoom - 1)) / 2
+        val newPan = Offset(
+            (panOffset.x + offsetChange.x).coerceIn(-maxPanX, maxPanX),
+            (panOffset.y + offsetChange.y).coerceIn(-maxPanY, maxPanY)
+        )
+        onZoomChange(newZoom, newPan)
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { containerSize = it }
+            .graphicsLayer {
+                scaleX = zoomLevel
+                scaleY = zoomLevel
+                translationX = panOffset.x
+                translationY = panOffset.y
+            }
+            .transformable(state = transformableState)
             .then(
-                // Tap gestures when not in annotation mode
-                if (toolState.currentTool == AnnotationTool.NONE) {
-                    Modifier
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { onTap() }
-                            )
-                        }
+                // Tap gestures when not in annotation mode and not zoomed
+                if (effectiveTool == AnnotationTool.NONE && !isZoomed) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(onTap = { onTap() })
+                    }
                 } else {
                     Modifier
                 }
@@ -382,8 +428,7 @@ private fun PdfPageWithAnnotations(
         contentAlignment = Alignment.Center
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
+            modifier = Modifier.fillMaxSize()
         ) {
             // PDF page bitmap
             bitmap?.let { bmp ->
@@ -420,10 +465,10 @@ private fun PdfPageWithAnnotations(
             )
             
             // Always render existing strokes (when not in ink mode, use disabled canvas)
-            if (toolState.currentTool != AnnotationTool.PEN && 
-                toolState.currentTool != AnnotationTool.PEN_2 && 
-                toolState.currentTool != AnnotationTool.HIGHLIGHTER &&
-                toolState.currentTool != AnnotationTool.ERASER) {
+            if (effectiveTool != AnnotationTool.PEN && 
+                effectiveTool != AnnotationTool.PEN_2 && 
+                effectiveTool != AnnotationTool.HIGHLIGHTER &&
+                effectiveTool != AnnotationTool.ERASER) {
                 InkingCanvas(
                     modifier = Modifier.fillMaxSize(),
                     strokes = screenStrokes,
@@ -432,8 +477,8 @@ private fun PdfPageWithAnnotations(
                 )
             }
             
-            // Tool-specific overlays
-            when (toolState.currentTool) {
+            // Tool-specific overlays (disabled when zoomed)
+            when (effectiveTool) {
                 AnnotationTool.PEN, AnnotationTool.PEN_2, AnnotationTool.HIGHLIGHTER, AnnotationTool.HIGHLIGHTER_2, AnnotationTool.ERASER -> {
                     InkingCanvas(
                         modifier = Modifier.fillMaxSize(),
