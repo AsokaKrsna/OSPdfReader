@@ -28,7 +28,7 @@ Being frustrated with paywalls locking basic PDF features behind subscriptions, 
 | ✏️ **Annotations** | Pen, highlighter, shapes with multiple colors and stroke widths |
 | 🔍 **Full-text Search** | Search across all pages instantly |
 | 🔤 **OCR** | Offline text recognition for scanned documents (Tesseract) |
-| ☁️ **Google Drive Sync** | Backup and sync your annotated PDFs (Need Setup) |
+| ☁️ **Google Drive Sync** | Backup and sync your annotated PDFs ([Setup Guide](docs/GOOGLE_DRIVE_SETUP.md)) |
 | 🌙 **Multiple Themes** | Light, Dark, AMOLED, and Dynamic Colors (Material You) |
 | ♿ **Accessibility** | Reduce motion, high contrast, keep screen on |
 | 🖊️ **Stylus Support** | Pressure-sensitive inking for stylus users |
