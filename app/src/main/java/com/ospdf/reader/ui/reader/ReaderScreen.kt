@@ -482,12 +482,52 @@ private fun PdfPageWithAnnotations(
                 translationX = panOffset.x
                 translationY = panOffset.y
             }
-            .transformable(state = transformableState)
+            // When zoomed: full pan+zoom. When not zoomed: pinch-only (multi-touch)
+            .then(
+                if (isZoomed) {
+                    Modifier.transformable(state = transformableState)
+                } else {
+                    // Pinch-to-zoom only - uses multi-touch, doesn't block single-finger swipes
+                    Modifier.pointerInput(zoomLevel) {
+                        awaitEachGesture {
+                            // Wait for first finger
+                            awaitFirstDown(requireUnconsumed = false)
+                            do {
+                                val event = awaitPointerEvent()
+                                // Only process if we have 2+ fingers (pinch gesture)
+                                if (event.changes.size >= 2) {
+                                    val change1 = event.changes[0]
+                                    val change2 = event.changes[1]
+                                    
+                                    val oldDist = (change1.previousPosition - change2.previousPosition).getDistance()
+                                    val newDist = (change1.position - change2.position).getDistance()
+                                    
+                                    if (oldDist > 0f && newDist > 0f) {
+                                        val zoomChange = newDist / oldDist
+                                        val newZoom = (zoomLevel * zoomChange).coerceIn(1f, 5f)
+                                        onZoomChange(newZoom, Offset.Zero)
+                                    }
+                                    
+                                    // Consume to prevent interference
+                                    event.changes.forEach { it.consume() }
+                                }
+                            } while (event.changes.any { it.pressed })
+                        }
+                    }
+                }
+            )
             .then(
                 // Tap gestures when not in annotation mode and not zoomed
                 if (effectiveTool == AnnotationTool.NONE && !isZoomed) {
                     Modifier.pointerInput(Unit) {
-                        detectTapGestures(onTap = { onTap() })
+                        detectTapGestures(
+                            onDoubleTap = { offset ->
+                                // Double-tap to zoom
+                                val newZoom = if (zoomLevel > 1.05f) 1f else 2.5f
+                                onZoomChange(newZoom, Offset.Zero)
+                            },
+                            onTap = { onTap() }
+                        )
                     }
                 } else {
                     Modifier

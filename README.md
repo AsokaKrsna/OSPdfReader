@@ -10,6 +10,14 @@
 
 ---
 
+## 🆕 Recent Updates
+
+**v1.0.1** (January 2026)
+- ✅ Fixed page swipe navigation (horizontal & vertical modes)
+- ✅ Improved zoom gestures: pinch-to-zoom + double-tap to zoom (Somr glithy behaviour is there.)
+
+---
+
 ## 💡 Why OSPdfReader?
 
 Being frustrated with paywalls locking basic PDF features behind subscriptions, this app was developed keeping personal and community needs in mind—**especially for students**—to ensure everyone has access to a quality PDF reading and annotation tool with cloud backup, completely free.
@@ -39,7 +47,13 @@ Being frustrated with paywalls locking basic PDF features behind subscriptions, 
 
 ## 📱 Screenshots
 
-*Coming soon*
+![](images/photo_2026-01-15_20-17-51.jpg)
+![](images/photo_2026-01-15_20-18-05.jpg)
+![](images/photo_2026-01-15_20-18-12.jpg)
+![](images/photo_2026-01-15_20-18-18.jpg)
+![](images/photo_2026-01-15_20-18-23.jpg)
+![](images/photo_2026-01-15_20-18-27.jpg)
+![](images/photo_2026-01-15_20-18-31.jpg)
 
 ---
 
