@@ -62,7 +62,11 @@ data class ReaderUiState(
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val hasUnsavedChanges: Boolean = false,
-    val isExiting: Boolean = false
+    val isExiting: Boolean = false,
+    // User preferences that affect the reader
+    val keepScreenOn: Boolean = true,
+    val reducedMotion: Boolean = false,
+    val autoSaveAnnotations: Boolean = true
 )
 
 /**
@@ -86,6 +90,21 @@ class ReaderViewModel @Inject constructor(
     
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
+    
+    init {
+        // Collect user preferences and update UI state
+        viewModelScope.launch {
+            preferencesManager.userPreferences.collect { prefs ->
+                _uiState.update { state ->
+                    state.copy(
+                        keepScreenOn = prefs.keepScreenOn,
+                        reducedMotion = prefs.reducedMotion,
+                        autoSaveAnnotations = prefs.autoSaveAnnotations
+                    )
+                }
+            }
+        }
+    }
     
     // Page bitmap flows for UI observation
     private val pageBitmapFlows = mutableMapOf<Int, MutableStateFlow<Bitmap?>>()
@@ -760,8 +779,16 @@ class ReaderViewModel @Inject constructor(
     }
     
     fun saveAndExit() {
+        val currentState = _uiState.value
         _uiState.update { it.copy(isExiting = true) }
-        saveAnnotations()
+        
+        // Only save if auto-save is enabled and there are unsaved changes
+        if (currentState.autoSaveAnnotations && currentState.hasUnsavedChanges) {
+            saveAnnotations()
+        } else {
+            // Just mark as no unsaved changes to trigger exit
+            _uiState.update { it.copy(hasUnsavedChanges = false) }
+        }
     }
     
     // -------------------- UI State Toggles --------------------

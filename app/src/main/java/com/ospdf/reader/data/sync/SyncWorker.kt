@@ -1,6 +1,9 @@
 package com.ospdf.reader.data.sync
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.os.Build
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
 import com.ospdf.reader.data.cloud.GoogleDriveAuth
@@ -34,6 +37,27 @@ class SyncWorker @AssistedInject constructor(
         const val SYNC_TYPE_UPLOAD = "upload"
         const val SYNC_TYPE_DOWNLOAD = "download"
         const val SYNC_TYPE_FULL = "full"
+        
+        private const val SYNC_CHANNEL_ID = "sync_channel"
+        private const val SYNC_CHANNEL_NAME = "PDF Sync"
+        
+        /**
+         * Creates the notification channel for sync operations.
+         * Should be called once at app startup.
+         */
+        fun createNotificationChannel(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    SYNC_CHANNEL_ID,
+                    SYNC_CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Notifications for PDF sync with Google Drive"
+                }
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.createNotificationChannel(channel)
+            }
+        }
         
         /**
          * Creates a one-time upload work request.
@@ -200,14 +224,17 @@ class SyncWorker @AssistedInject constructor(
     }
     
     override suspend fun getForegroundInfo(): ForegroundInfo {
-        // For expedited work on older Android versions
+        // Ensure notification channel is created
+        createNotificationChannel(applicationContext)
+        
         val notification = androidx.core.app.NotificationCompat.Builder(
             applicationContext,
-            "sync_channel"
+            SYNC_CHANNEL_ID
         )
             .setContentTitle("Syncing PDFs")
             .setContentText("Uploading to Google Drive...")
             .setSmallIcon(android.R.drawable.ic_popup_sync)
+            .setOngoing(true)
             .build()
         
         return ForegroundInfo(1001, notification)

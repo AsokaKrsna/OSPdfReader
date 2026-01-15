@@ -15,8 +15,14 @@ import javax.inject.Singleton
 @Singleton
 class BitmapCache @Inject constructor() {
     
+    companion object {
+        // Maximum cache size in KB to prevent OOM on high-memory devices
+        private const val MAX_CACHE_SIZE_KB = 100 * 1024 // 100 MB
+    }
+    
     private val maxMemory = Runtime.getRuntime().maxMemory() / 1024
-    private val cacheSize = (maxMemory / 4).toInt() // Use 1/4 of available memory
+    // Use 1/4 of available memory, but cap at MAX_CACHE_SIZE_KB to prevent OOM
+    private val cacheSize = minOf((maxMemory / 4).toInt(), MAX_CACHE_SIZE_KB)
     
     private val cache = object : LruCache<String, Bitmap>(cacheSize) {
         override fun sizeOf(key: String, bitmap: Bitmap): Int {

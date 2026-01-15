@@ -139,12 +139,27 @@ class HyperlinkHandler @Inject constructor(
         }
     }
     
+    companion object {
+        // Only allow safe URI schemes to prevent malicious PDFs from opening dangerous links
+        private val SAFE_URI_SCHEMES = setOf("http", "https", "mailto")
+    }
+    
     /**
      * Opens an external URL in the default browser.
+     * Only allows safe schemes (http, https, mailto) to prevent security issues.
      */
     fun openExternalUrl(url: String) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            val uri = Uri.parse(url)
+            val scheme = uri.scheme?.lowercase()
+            
+            // Security: Only allow safe URI schemes
+            if (scheme == null || scheme !in SAFE_URI_SCHEMES) {
+                android.util.Log.w("HyperlinkHandler", "Blocked unsafe URI scheme: $scheme")
+                return
+            }
+            
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)

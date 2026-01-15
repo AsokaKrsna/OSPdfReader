@@ -2,6 +2,7 @@ package com.ospdf.reader.ui.reader
 
 import android.graphics.Bitmap
 import android.net.Uri
+import android.view.WindowManager
 import androidx.compose.animation.*
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
@@ -58,6 +60,20 @@ fun ReaderScreen(
     val currentSelection by viewModel.currentSelection.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    
+    // Apply keep screen on setting
+    DisposableEffect(uiState.keepScreenOn) {
+        val window = (context as? android.app.Activity)?.window
+        if (uiState.keepScreenOn) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
     
     // Initialize document on first composition
     LaunchedEffect(fileUri) {
@@ -124,8 +140,8 @@ fun ReaderScreen(
             // Search bar (shown when search is active)
             AnimatedVisibility(
                 visible = uiState.showSearch,
-                enter = fadeIn() + slideInVertically(),
-                exit = fadeOut() + slideOutVertically()
+                enter = if (uiState.reducedMotion) EnterTransition.None else fadeIn() + slideInVertically(),
+                exit = if (uiState.reducedMotion) ExitTransition.None else fadeOut() + slideOutVertically()
             ) {
                 SearchBar(
                     query = uiState.searchQuery,
@@ -143,8 +159,8 @@ fun ReaderScreen(
             // Normal top bar (hidden during search)
             AnimatedVisibility(
                 visible = showControls && !uiState.showAnnotationToolbar && !uiState.showSearch,
-                enter = fadeIn() + slideInVertically(),
-                exit = fadeOut() + slideOutVertically()
+                enter = if (uiState.reducedMotion) EnterTransition.None else fadeIn() + slideInVertically(),
+                exit = if (uiState.reducedMotion) ExitTransition.None else fadeOut() + slideOutVertically()
             ) {
                 ReaderTopBar(
                     title = uiState.documentName,
@@ -165,8 +181,8 @@ fun ReaderScreen(
         bottomBar = {
             AnimatedVisibility(
                 visible = showControls || uiState.showAnnotationToolbar, // Show during annotation mode to allow zoom
-                enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-                exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
+                enter = if (uiState.reducedMotion) EnterTransition.None else fadeIn() + slideInVertically(initialOffsetY = { it }),
+                exit = if (uiState.reducedMotion) ExitTransition.None else fadeOut() + slideOutVertically(targetOffsetY = { it })
             ) {
                 ReaderBottomBar(
                     currentPage = uiState.currentPage + 1,

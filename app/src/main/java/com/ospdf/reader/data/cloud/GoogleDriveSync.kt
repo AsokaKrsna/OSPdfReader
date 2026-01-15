@@ -211,8 +211,12 @@ class GoogleDriveSync @Inject constructor(
         return try {
             val drive = auth.getDriveService() ?: return null
             
+            // Sanitize file name to prevent query injection
+            val safeFileName = escapeForDriveQuery(fileName)
+            val safeFolderId = escapeForDriveQuery(folderId)
+            
             val result = drive.files().list()
-                .setQ("'$folderId' in parents and name='$fileName' and trashed=false")
+                .setQ("'$safeFolderId' in parents and name='$safeFileName' and trashed=false")
                 .setSpaces("drive")
                 .setFields("files(id, name)")
                 .execute()
@@ -221,5 +225,14 @@ class GoogleDriveSync @Inject constructor(
         } catch (e: Exception) {
             null
         }
+    }
+    
+    /**
+     * Escapes special characters for use in Google Drive API queries.
+     */
+    private fun escapeForDriveQuery(input: String): String {
+        return input
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
     }
 }

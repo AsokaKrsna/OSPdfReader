@@ -4,10 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import com.googlecode.tesseract.android.TessBaseAPI
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import javax.inject.Inject
@@ -46,6 +45,11 @@ class OcrEngine @Inject constructor(
     private var tessApi: TessBaseAPI? = null
     private val mutex = Mutex()
     private var isInitialized = false
+    
+    // Idle timeout configuration
+    private val idleTimeoutMs = 30_000L // Release after 30 seconds of inactivity
+    private var idleJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     // Supported languages - start with English
     private val defaultLanguage = "eng"
@@ -157,11 +161,26 @@ class OcrEngine @Inject constructor(
                         confidence = confidence,
                         words = words
                     )
-                )
+                ).also {
+                    // Reset idle timeout after each successful OCR operation
+                    resetIdleTimeout()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
                 Result.failure(e)
             }
+        }
+    }
+    
+    /**
+     * Resets the idle timeout. Call after each OCR operation.
+     * Will auto-release resources after idleTimeoutMs of inactivity.
+     */
+    private fun resetIdleTimeout() {
+        idleJob?.cancel()
+        idleJob = scope.launch {
+            delay(idleTimeoutMs)
+            release()
         }
     }
     

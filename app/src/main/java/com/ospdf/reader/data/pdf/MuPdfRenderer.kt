@@ -341,6 +341,58 @@ class MuPdfRenderer @Inject constructor(
         
         return name
     }
+    
+    /**
+     * Clears all cached PDF files.
+     * Call this when the user signs out or to free up storage.
+     * @return Number of bytes freed
+     */
+    suspend fun clearCache(): Long = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            // First close any open document
+            closeDocumentInternal()
+            
+            var bytesFreed = 0L
+            
+            // Clear pdf_cache directory
+            val cacheDir = File(context.cacheDir, "pdf_cache")
+            if (cacheDir.exists()) {
+                cacheDir.listFiles()?.forEach { file ->
+                    bytesFreed += file.length()
+                    file.delete()
+                }
+            }
+            
+            bytesFreed
+        }
+    }
+    
+    /**
+     * Clears temporary annotation files.
+     * @return Number of bytes freed
+     */
+    suspend fun clearTempFiles(): Long = withContext(Dispatchers.IO) {
+        var bytesFreed = 0L
+        
+        // Clear pdf_temp directory
+        val tempDir = File(context.cacheDir, "pdf_temp")
+        if (tempDir.exists()) {
+            tempDir.listFiles()?.forEach { file ->
+                bytesFreed += file.length()
+                file.delete()
+            }
+        }
+        
+        bytesFreed
+    }
+    
+    /**
+     * Clears all cached and temporary PDF files.
+     * @return Total bytes freed
+     */
+    suspend fun clearAllCachedFiles(): Long {
+        return clearCache() + clearTempFiles()
+    }
 }
 
 /**
