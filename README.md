@@ -68,17 +68,17 @@ Being frustrated with paywalls locking basic PDF features behind subscriptions, 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/OSPdfReader.git
+git clone https://github.com/asokakrsha/OSPdfReader.git
 cd OSPdfReader
 
 # Build debug APK
 ./gradlew assembleDebug
 
-# Or open in Android Studio and run
+# Or open in Android Studio and run 
 ```
 
 ---
-
+ 
 ## 🏗️ Architecture
 
 | Component | Technology |
