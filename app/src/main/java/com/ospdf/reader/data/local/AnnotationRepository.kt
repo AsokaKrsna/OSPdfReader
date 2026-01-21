@@ -3,7 +3,7 @@ package com.ospdf.reader.data.local
 import androidx.compose.ui.graphics.Color
 import com.ospdf.reader.domain.model.ShapeType
 import com.ospdf.reader.domain.model.StrokePoint
-import com.ospdf.reader.ui.components.InkStroke
+import com.ospdf.reader.domain.model.InkStroke
 import com.ospdf.reader.ui.tools.ShapeAnnotation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

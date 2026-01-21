@@ -1,6 +1,6 @@
 package com.ospdf.reader.domain.usecase
 
-import com.ospdf.reader.ui.components.InkStroke
+import com.ospdf.reader.domain.model.InkStroke
 
 /**
  * Command pattern interface for undo/redo operations.

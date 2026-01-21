@@ -8,7 +8,7 @@ import android.graphics.Path
 import android.net.Uri
 import com.artifex.mupdf.fitz.*
 import com.ospdf.reader.domain.model.ShapeType
-import com.ospdf.reader.ui.components.InkStroke
+import com.ospdf.reader.domain.model.InkStroke
 import com.ospdf.reader.ui.tools.ShapeAnnotation
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers

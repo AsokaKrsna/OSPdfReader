@@ -13,7 +13,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.viewinterop.AndroidView
-import com.ospdf.reader.ui.components.InkStroke
+import com.ospdf.reader.domain.model.InkStroke
 import com.ospdf.reader.ui.theme.InkColors
 import kotlin.math.abs
 import kotlin.math.pow

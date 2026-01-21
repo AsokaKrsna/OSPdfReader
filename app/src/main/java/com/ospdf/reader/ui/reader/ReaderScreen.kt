@@ -32,11 +32,13 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.ospdf.reader.domain.model.AnnotationTool
 import com.ospdf.reader.domain.model.ReadingMode
+import com.ospdf.reader.domain.model.InkStroke
 import com.ospdf.reader.ui.components.FloatingAnnotationToolbar
 import com.ospdf.reader.ui.components.InkingCanvas
 import com.ospdf.reader.ui.components.SearchBar
@@ -130,6 +132,9 @@ fun ReaderScreen(
     // Zoom state - shared across pages
     var zoomLevel by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+
+    // State to track if stylus is currently drawing/erasing
+    var isStylusInUse by remember { mutableStateOf(false) }
     
     // Annotations are disabled when zoomed in
     val isZoomed = zoomLevel > 1.05f
@@ -179,18 +184,31 @@ fun ReaderScreen(
             }
         },
         bottomBar = {
+            // Collapsible navigation bar at bottom
             AnimatedVisibility(
-                visible = showControls || uiState.showAnnotationToolbar, // Show during annotation mode to allow zoom
+                visible = showControls && !uiState.showSearch,
                 enter = if (uiState.reducedMotion) EnterTransition.None else fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = if (uiState.reducedMotion) ExitTransition.None else fadeOut() + slideOutVertically(targetOffsetY = { it })
             ) {
-                ReaderBottomBar(
+                CollapsibleBottomBar(
                     currentPage = uiState.currentPage + 1,
                     pageCount = uiState.pageCount,
                     readingMode = uiState.readingMode,
                     onPageChange = { page ->
                         scope.launch {
                             pagerState.animateScrollToPage(page - 1)
+                        }
+                    },
+                    onPreviousPage = {
+                        scope.launch {
+                            val newPage = (uiState.currentPage - 1).coerceAtLeast(0)
+                            pagerState.animateScrollToPage(newPage)
+                        }
+                    },
+                    onNextPage = {
+                        scope.launch {
+                            val newPage = (uiState.currentPage + 1).coerceAtMost(uiState.pageCount - 1)
+                            pagerState.animateScrollToPage(newPage)
                         }
                     },
                     onToggleMode = { viewModel.toggleReadingMode() }
@@ -225,7 +243,8 @@ fun ReaderScreen(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize(),
                                 // Allow finger scrolling - stylus only for annotations
-                                userScrollEnabled = zoomLevel <= 1.05f // Disable paging when zoomed
+                                // Disable scroll when zoomed OR when stylus is actively drawing
+                                userScrollEnabled = (zoomLevel <= 1.05f) && !isStylusInUse
                             ) { pageIndex ->
                                 PdfPageWithAnnotations(
                                     pageIndex = pageIndex,
@@ -241,7 +260,8 @@ fun ReaderScreen(
                                     searchResults = uiState.searchResults.filter { it.pageNumber == pageIndex },
                                     currentSearchIndex = uiState.currentSearchIndex,
                                     allSearchResults = uiState.searchResults,
-                                    onTap = { showControls = !showControls }
+                                    onTap = { showControls = !showControls },
+                                    onStylusActiveChange = { isStylusInUse = it }
                                 )
                             }
                         }
@@ -250,7 +270,8 @@ fun ReaderScreen(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize(),
                                 // Allow finger scrolling - stylus only for annotations
-                                userScrollEnabled = zoomLevel <= 1.05f
+                                // Disable scroll when zoomed OR when stylus is actively drawing
+                                userScrollEnabled = (zoomLevel <= 1.05f) && !isStylusInUse
                             ) { pageIndex ->
                                 PdfPageWithAnnotations(
                                     pageIndex = pageIndex,
@@ -266,27 +287,14 @@ fun ReaderScreen(
                                     searchResults = uiState.searchResults.filter { it.pageNumber == pageIndex },
                                     currentSearchIndex = uiState.currentSearchIndex,
                                     allSearchResults = uiState.searchResults,
-                                    onTap = { showControls = !showControls }
+                                    onTap = { showControls = !showControls },
+                                    onStylusActiveChange = { isStylusInUse = it }
                                 )
                             }
                         }
                     }
                     
-                    // Page indicator overlay
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 16.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.Black.copy(alpha = 0.6f))
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = "${uiState.currentPage + 1} / ${uiState.pageCount}",
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
+                    // Page indicator removed - now shown in bottom collapsible bar
 
                     // Lasso selection actions
                     if (uiState.toolState.currentTool == AnnotationTool.LASSO && currentSelection?.hasSelection == true) {
@@ -310,6 +318,7 @@ fun ReaderScreen(
                     if (uiState.showAnnotationToolbar) {
                         FloatingAnnotationToolbar(
                             toolState = uiState.toolState,
+                            recentTools = uiState.recentTools,
                             canUndo = uiState.canUndo,
                             canRedo = uiState.canRedo,
                             isZoomed = isZoomed,
@@ -370,12 +379,18 @@ private fun PdfPageWithAnnotations(
     searchResults: List<SearchResult> = emptyList(),
     currentSearchIndex: Int = -1,
     allSearchResults: List<SearchResult> = emptyList(),
-    onTap: () -> Unit
+    onTap: () -> Unit,
+    onStylusActiveChange: (Boolean) -> Unit = {} // Add explicit parameter for propagation if needed, but here ReaderScreen handles the state at root.
+    // Actually, PdfPageWithAnnotations is inside the Pager. We need to pass the callback UP to ReaderScreen.
+    // So we add a callback here.
 ) {
+    // ... existing variables ...
     val bitmap by viewModel.getPageBitmap(pageIndex).collectAsState(initial = null)
     val pageStrokes by viewModel.getPageStrokes(pageIndex).collectAsState()
     val pageShapes by viewModel.getPageShapes(pageIndex).collectAsState()
     val currentSelection by viewModel.currentSelection.collectAsState()
+    
+    // ... rest of the function ...
     
     // Text lines for smart highlighter
     var textLines by remember { mutableStateOf<List<com.ospdf.reader.data.pdf.TextLine>>(emptyList()) }
@@ -641,15 +656,9 @@ private fun PdfPageWithAnnotations(
                         onStrokeEnd = { stroke ->
                             // Convert the drawn stroke from screen space to PDF page space so saved annotations align.
                             val scale = fitScale * renderScale
-                            android.util.Log.d("ReaderScreen", "Coordinate transform: fitScale=$fitScale, renderScale=$renderScale, scale=$scale")
-                            android.util.Log.d("ReaderScreen", "Image offset: left=$imageLeft, top=$imageTop")
-                            android.util.Log.d("ReaderScreen", "Bitmap size: ${bitmap?.width}x${bitmap?.height}")
                             
-                            // Log original screen coords
                             if (stroke.points.isNotEmpty()) {
-                                val firstPt = stroke.points.first()
-                                val lastPt = stroke.points.last()
-                                android.util.Log.d("ReaderScreen", "Screen coords: first=(${firstPt.x}, ${firstPt.y}), last=(${lastPt.x}, ${lastPt.y})")
+                                // ... logging ...
                             }
                             
                             val mapped = stroke.copy(
@@ -664,18 +673,27 @@ private fun PdfPageWithAnnotations(
                                 strokeWidth = stroke.strokeWidth / scale
                             )
                             
-                            // Log mapped PDF coords
-                            if (mapped.points.isNotEmpty()) {
-                                val firstPt = mapped.points.first()
-                                val lastPt = mapped.points.last()
-                                android.util.Log.d("ReaderScreen", "PDF coords: first=(${firstPt.x}, ${firstPt.y}), last=(${lastPt.x}, ${lastPt.y})")
-                            }
-                            
                             viewModel.addStroke(mapped)
                         },
                         onStrokeErase = { strokeId -> viewModel.removeStroke(strokeId) },
-                        onTap = onTap
+                        onTap = onTap,
+                        onStylusActiveChange = onStylusActiveChange
                     )
+                    
+                    // Enable shape erasing when eraser tool is active
+                    // This canvas now handles BOTH shape and stroke erasing (consolidated input)
+                    if (effectiveTool == AnnotationTool.ERASER) {
+                        ShapeCanvas(
+                            modifier = Modifier.fillMaxSize(),
+                            shapes = screenShapes,
+                            strokes = screenStrokes,
+                            toolState = toolState,
+                            enabled = true,
+                            onShapeErase = { shapeId -> viewModel.removeShape(shapeId) },
+                            onStrokeErase = { strokeId -> viewModel.removeStroke(strokeId) },
+                            onStylusActiveChange = onStylusActiveChange
+                        )
+                    }
                 }
                 AnnotationTool.SHAPE -> {
                     ShapeCanvas(
@@ -879,4 +897,383 @@ private fun ReaderBottomBar(
     }
 }
 
+
+
+@Composable
+private fun CollapsibleTopBar(
+    currentPage: Int,
+    pageCount: Int,
+    readingMode: ReadingMode,
+    onPageChange: (Int) -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
+    onToggleMode: () -> Unit
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    
+    Surface(
+        color = Color(0xCC000000),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        AnimatedContent(
+            targetState = isExpanded,
+            transitionSpec = {
+                (fadeIn() + expandVertically()) togetherWith (fadeOut() + shrinkVertically())
+            },
+            label = "topBarExpansion"
+        ) { expanded ->
+            if (expanded) {
+                ExpandedTopBar(
+                    currentPage = currentPage,
+                    pageCount = pageCount,
+                    readingMode = readingMode,
+                    onPageChange = onPageChange,
+                    onPreviousPage = onPreviousPage,
+                    onNextPage = onNextPage,
+                    onToggleMode = onToggleMode,
+                    onCollapse = { isExpanded = false }
+                )
+            } else {
+                CollapsedTopBar(
+                    currentPage = currentPage,
+                    pageCount = pageCount,
+                    onExpand = { isExpanded = true }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollapsedTopBar(
+    currentPage: Int,
+    pageCount: Int,
+    onExpand: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(36.dp)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "Page $currentPage of $pageCount",
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White.copy(alpha = 0.9f)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        IconButton(
+            onClick = onExpand,
+            modifier = Modifier.size(24.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ExpandMore,
+                contentDescription = "Show navigation",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExpandedTopBar(
+    currentPage: Int,
+    pageCount: Int,
+    readingMode: ReadingMode,
+    onPageChange: (Int) -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
+    onToggleMode: () -> Unit,
+    onCollapse: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        IconButton(
+            onClick = onPreviousPage,
+            enabled = currentPage > 1,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ChevronLeft,
+                contentDescription = "Previous page",
+                tint = if (currentPage > 1) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.3f)
+            )
+        }
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "$currentPage",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.width(32.dp),
+                textAlign = TextAlign.End
+            )
+            Slider(
+                value = currentPage.toFloat(),
+                onValueChange = { onPageChange(it.toInt()) },
+                valueRange = 1f..pageCount.toFloat().coerceAtLeast(1f),
+                steps = maxOf(0, pageCount - 2),
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White.copy(alpha = 0.8f),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                )
+            )
+            Text(
+                text = "$pageCount",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.width(32.dp)
+            )
+        }
+        IconButton(
+            onClick = onNextPage,
+            enabled = currentPage < pageCount,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = "Next page",
+                tint = if (currentPage < pageCount) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.3f)
+            )
+        }
+        IconButton(
+            onClick = onToggleMode,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = when (readingMode) {
+                    ReadingMode.HORIZONTAL_SWIPE -> Icons.Filled.SwipeRight
+                    ReadingMode.VERTICAL_SCROLL -> Icons.Filled.SwipeDown
+                },
+                contentDescription = "Toggle reading mode",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        IconButton(
+            onClick = onCollapse,
+            modifier = Modifier.size(24.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ExpandLess,
+                contentDescription = "Hide navigation",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+
+@Composable
+private fun CollapsibleBottomBar(
+    currentPage: Int,
+    pageCount: Int,
+    readingMode: ReadingMode,
+    onPageChange: (Int) -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
+    onToggleMode: () -> Unit
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    
+    Surface(
+        color = Color(0xCC000000),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        AnimatedContent(
+            targetState = isExpanded,
+            transitionSpec = {
+                (fadeIn() + expandVertically()) togetherWith (fadeOut() + shrinkVertically())
+            },
+            label = "bottomBarExpansion"
+        ) { expanded ->
+            if (expanded) {
+                ExpandedBottomBar(
+                    currentPage = currentPage,
+                    pageCount = pageCount,
+                    readingMode = readingMode,
+                    onPageChange = onPageChange,
+                    onPreviousPage = onPreviousPage,
+                    onNextPage = onNextPage,
+                    onToggleMode = onToggleMode,
+                    onCollapse = { isExpanded = false }
+                )
+            } else {
+                CollapsedBottomBar(
+                    currentPage = currentPage,
+                    pageCount = pageCount,
+                    onExpand = { isExpanded = true }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollapsedBottomBar(
+    currentPage: Int,
+    pageCount: Int,
+    onExpand: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // Background bar
+        Surface(
+            color = Color(0xCC000000),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "Page $currentPage of $pageCount",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.9f)
+                )
+            }
+        }
+        
+        // Prominent blue notch button
+        Surface(
+            onClick = onExpand,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = (-8).dp)
+                .size(width = 80.dp, height = 24.dp),
+            shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
+            color = Color(0xFF4A90E2),
+            shadowElevation = 4.dp
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Filled.ExpandLess,
+                    contentDescription = "Show navigation controls",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExpandedBottomBar(
+    currentPage: Int,
+    pageCount: Int,
+    readingMode: ReadingMode,
+    onPageChange: (Int) -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
+    onToggleMode: () -> Unit,
+    onCollapse: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        IconButton(
+            onClick = onPreviousPage,
+            enabled = currentPage > 1,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ChevronLeft,
+                contentDescription = "Previous page",
+                tint = if (currentPage > 1) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.3f)
+            )
+        }
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.width(32.dp),
+                textAlign = TextAlign.End
+            )
+            Slider(
+                value = currentPage.toFloat(),
+                onValueChange = { onPageChange(it.toInt()) },
+                valueRange = 1f..pageCount.toFloat().coerceAtLeast(1f),
+                steps = maxOf(0, pageCount - 2),
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White.copy(alpha = 0.8f),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                )
+            )
+            Text(
+                text = "",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.width(32.dp)
+            )
+        }
+        IconButton(
+            onClick = onNextPage,
+            enabled = currentPage < pageCount,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = "Next page",
+                tint = if (currentPage < pageCount) Color.White.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.3f)
+            )
+        }
+        IconButton(
+            onClick = onToggleMode,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = when (readingMode) {
+                    ReadingMode.HORIZONTAL_SWIPE -> Icons.Filled.SwipeRight
+                    ReadingMode.VERTICAL_SCROLL -> Icons.Filled.SwipeDown
+                },
+                contentDescription = "Toggle reading mode",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        IconButton(
+            onClick = onCollapse,
+            modifier = Modifier.size(24.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ExpandMore,
+                contentDescription = "Hide navigation",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
 

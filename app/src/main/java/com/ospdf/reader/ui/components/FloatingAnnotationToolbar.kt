@@ -50,6 +50,7 @@ import kotlin.math.sin
 fun FloatingAnnotationToolbar(
     modifier: Modifier = Modifier,
     toolState: ToolState,
+    recentTools: List<AnnotationTool> = emptyList(),
     canUndo: Boolean,
     canRedo: Boolean,
     isZoomed: Boolean = false,
@@ -219,6 +220,45 @@ fun FloatingAnnotationToolbar(
                     },
                     modifier = Modifier.size(24.dp)
                 )
+            }
+            
+            // Quick access buttons for recent tools (shown when collapsed)
+            if (!isExpanded && !isZoomed && recentTools.isNotEmpty()) {
+                val quickAccessRadius = 52.dp
+                val quickRadiusPx = with(density) { quickAccessRadius.toPx() }
+                
+                recentTools.take(3).forEachIndexed { index, tool ->
+                    // Position buttons in a small arc to the side
+                    val angleOffset = -60f + (index * 30f) // -60°, -30°, 0°
+                    val angleRad = angleOffset * PI.toFloat() / 180f
+                    
+                    val qx = cos(angleRad) * quickRadiusPx
+                    val qy = sin(angleRad) * quickRadiusPx
+                    
+                    Box(
+                        modifier = Modifier
+                            .offset { IntOffset(qx.roundToInt(), qy.roundToInt()) }
+                    ) {
+                        FloatingActionButton(
+                            onClick = { onToolSelected(tool) },
+                            modifier = Modifier.size(40.dp),
+                            containerColor = if (toolState.currentTool == tool) 
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                            else 
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                            contentColor = if (toolState.currentTool == tool)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else
+                                MaterialTheme.colorScheme.onSurface
+                        ) {
+                            Icon(
+                                imageVector = getToolIcon(tool, toolState.shapeType),
+                                contentDescription = tool.name,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
         

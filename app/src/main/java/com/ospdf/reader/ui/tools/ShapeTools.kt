@@ -57,10 +57,13 @@ data class ShapeAnnotation(
 fun ShapeCanvas(
     modifier: Modifier = Modifier,
     shapes: List<ShapeAnnotation>,
+    strokes: List<com.ospdf.reader.domain.model.InkStroke> = emptyList(),
     toolState: ToolState,
     enabled: Boolean = true,
     onShapeComplete: (ShapeAnnotation) -> Unit = {},
-    onShapeErase: (String) -> Unit = {}
+    onShapeErase: (String) -> Unit = {},
+    onStrokeErase: (String) -> Unit = {},
+    onStylusActiveChange: (Boolean) -> Unit = {}
 ) {
     var startPoint by remember { mutableStateOf<Offset?>(null) }
     var currentPoint by remember { mutableStateOf<Offset?>(null) }
@@ -69,7 +72,12 @@ fun ShapeCanvas(
     // Use rememberUpdatedState to capture latest values for AndroidView callbacks
     val currentToolState by rememberUpdatedState(toolState)
     val currentEnabled by rememberUpdatedState(enabled)
+    val currentShapes by rememberUpdatedState(shapes)
+    val currentStrokes by rememberUpdatedState(strokes)
     val currentOnShapeComplete by rememberUpdatedState(onShapeComplete)
+    val currentOnShapeErase by rememberUpdatedState(onShapeErase)
+    val currentOnStrokeErase by rememberUpdatedState(onStrokeErase)
+    val currentOnStylusActiveChange by rememberUpdatedState(onStylusActiveChange)
     
     Box(modifier = modifier.fillMaxSize()) {
         // Drawing canvas
@@ -116,28 +124,53 @@ fun ShapeCanvas(
                             return false
                         }
                         
-                        // Prevent parent from intercepting stylus
-                        if (isStylus && event.action == MotionEvent.ACTION_DOWN) {
-                            parent?.requestDisallowInterceptTouchEvent(true)
+                        // Prevent parent from intercepting stylus AND update lock state
+                        if (isStylus) {
+                            if (event.action == MotionEvent.ACTION_DOWN) {
+                                parent?.requestDisallowInterceptTouchEvent(true)
+                                currentOnStylusActiveChange(true)
+                            } else if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
+                                // We'll unlock in the ACTION_UP block below, ensuring it happens even if we return true earlier
+                            }
                         }
                         
                         return when (event.action) {
                             MotionEvent.ACTION_DOWN -> {
-                                isDrawing = true
-                                startPoint = Offset(event.x, event.y)
-                                currentPoint = Offset(event.x, event.y)
-                                true
+                                // Check if eraser is active
+                                if (currentToolState.currentTool == com.ospdf.reader.domain.model.AnnotationTool.ERASER) {
+                                    // Handle eraser: check hits for BOTH shapes and strokes
+                                    val shapeHit = checkShapeEraserHit(event.x, event.y, currentShapes, currentOnShapeErase, currentToolState.eraserWidth)
+                                    val strokeHit = checkStrokeEraserHit(event.x, event.y, currentStrokes, currentOnStrokeErase, currentToolState.eraserWidth)
+                                    
+                                    // Always consume Stylus/Eraser events in Eraser mode to prevent Pager from scrolling.
+                                    // Even if we didn't hit anything, we don't want the page to move while using the eraser tool.
+                                    true
+                                } else {
+                                    isDrawing = true
+                                    startPoint = Offset(event.x, event.y)
+                                    currentPoint = Offset(event.x, event.y)
+                                    true
+                                }
                             }
                             MotionEvent.ACTION_MOVE -> {
-                                if (isDrawing) {
+                                // For eraser, continuously check hits
+                                if (currentToolState.currentTool == com.ospdf.reader.domain.model.AnnotationTool.ERASER) {
+                                    checkShapeEraserHit(event.x, event.y, currentShapes, currentOnShapeErase, currentToolState.eraserWidth)
+                                    checkStrokeEraserHit(event.x, event.y, currentStrokes, currentOnStrokeErase, currentToolState.eraserWidth)
+                                    true
+                                } else if (isDrawing) {
                                     currentPoint = Offset(event.x, event.y)
+                                    true
+                                } else {
+                                    false
                                 }
-                                true
                             }
                             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                                 parent?.requestDisallowInterceptTouchEvent(false)
+                                currentOnStylusActiveChange(false)
                                 
-                                if (isDrawing && startPoint != null && currentPoint != null) {
+                                if (currentToolState.currentTool != com.ospdf.reader.domain.model.AnnotationTool.ERASER 
+                                    && isDrawing && startPoint != null && currentPoint != null) {
                                     val start = startPoint!!
                                     val end = currentPoint!!
                                     val snappedEnd = snapToAngle(start, end)
@@ -170,6 +203,55 @@ fun ShapeCanvas(
             modifier = Modifier.fillMaxSize()
         )
     }
+}
+
+/**
+ * Checks if the eraser position hits any stroke.
+ * Reusing logic similar to InkingCanvas but adapted for this context.
+ */
+private fun checkStrokeEraserHit(
+    x: Float,
+    y: Float,
+    strokes: List<com.ospdf.reader.domain.model.InkStroke>,
+    onStrokeErase: (String) -> Unit,
+    eraserRadius: Float
+): Boolean {
+    val hitPoint = Offset(x, y)
+    
+    for (stroke in strokes) {
+        var isHit = false
+        val points = stroke.points
+        
+        // 1. Check if any point is within radius (fast check)
+        for (point in points) {
+            val dx = abs(point.x - x)
+            val dy = abs(point.y - y)
+            if (dx < eraserRadius && dy < eraserRadius) {
+                isHit = true
+                break
+            }
+        }
+        
+        // 2. If no point hit, check segments (robust check)
+        if (!isHit && points.size > 1) {
+             for (i in 0 until points.size - 1) {
+                 val p1 = Offset(points[i].x, points[i].y)
+                 val p2 = Offset(points[i+1].x, points[i+1].y)
+                 
+                 val dist = distanceToLineSegment(hitPoint, p1, p2)
+                 if (dist < eraserRadius + stroke.strokeWidth / 2) {
+                     isHit = true
+                     break
+                 }
+             }
+        }
+        
+        if (isHit) {
+            onStrokeErase(stroke.id)
+            return true
+        }
+    }
+    return false
 }
 
 /**
@@ -399,3 +481,85 @@ object ShapeDetector {
         return if (pathLength > 0) (directDist / pathLength).coerceIn(0f, 1f) else 0f
     }
 }
+
+/**
+ * Checks if the eraser position hits any shape.
+ * Returns true if a shape was hit and erased, false otherwise.
+ */
+private fun checkShapeEraserHit(
+    x: Float,
+    y: Float,
+    shapes: List<ShapeAnnotation>,
+    onShapeErase: (String) -> Unit,
+    eraserRadius: Float = 20f
+): Boolean {
+    val hitPoint = Offset(x, y)
+    
+    for (shape in shapes) {
+        val isHit = when (shape.type) {
+            ShapeType.LINE -> {
+                // Check distance from point to line segment
+                distanceToLineSegment(
+                    hitPoint,
+                    Offset(shape.startX, shape.startY),
+                    Offset(shape.endX, shape.endY)
+                ) < eraserRadius + shape.strokeWidth
+            }
+            ShapeType.RECTANGLE -> {
+                // Check if point is near rectangle edges
+                val bounds = shape.bounds
+                val expanded = androidx.compose.ui.geometry.Rect(
+                    left = bounds.left - eraserRadius,
+                    top = bounds.top - eraserRadius,
+                    right = bounds.right + eraserRadius,
+                    bottom = bounds.bottom + eraserRadius
+                )
+                expanded.contains(hitPoint) && !shape.bounds.deflate(eraserRadius).contains(hitPoint)
+            }
+            ShapeType.CIRCLE -> {
+                // Check if point is near circle edge
+                val center = Offset(shape.centerX, shape.centerY)
+                val radius = maxOf(shape.width, shape.height) / 2
+                val dist = (hitPoint - center).getDistance()
+                abs(dist - radius) < eraserRadius + shape.strokeWidth
+            }
+            ShapeType.ARROW -> {
+                // Same as line for arrow
+                distanceToLineSegment(
+                    hitPoint,
+                    Offset(shape.startX, shape.startY),
+                    Offset(shape.endX, shape.endY)
+                ) < eraserRadius + shape.strokeWidth
+            }
+        }
+        
+        if (isHit) {
+            onShapeErase(shape.id)
+            return true // Shape was hit and erased
+        }
+    }
+    
+    return false // No shape was hit
+}
+
+/**
+ * Calculates the minimum distance from a point to a line segment.
+ */
+private fun distanceToLineSegment(point: Offset, lineStart: Offset, lineEnd: Offset): Float {
+    val lineLength = (lineEnd - lineStart).getDistance()
+    if (lineLength < 0.001f) {
+        // Line is essentially a point
+        return (point - lineStart).getDistance()
+    }
+    
+    // Calculate the projection of point onto the line
+    val t = ((point - lineStart).dotProduct(lineEnd - lineStart) / (lineLength * lineLength)).coerceIn(0f, 1f)
+    val projection = lineStart + (lineEnd - lineStart) * t
+    
+    return (point - projection).getDistance()
+}
+
+/**
+ * Dot product of two 2D vectors represented as Offsets.
+ */
+private fun Offset.dotProduct(other: Offset): Float = this.x * other.x + this.y * other.y

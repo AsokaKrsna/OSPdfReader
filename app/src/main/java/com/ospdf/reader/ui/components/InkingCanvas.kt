@@ -1,9 +1,9 @@
 package com.ospdf.reader.ui.components
 
-import android.graphics.Path
-import android.view.MotionEvent
-import android.view.View
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
@@ -12,54 +12,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import com.ospdf.reader.domain.model.AnnotationTool
 import com.ospdf.reader.domain.model.StrokePoint
 import com.ospdf.reader.domain.model.ToolState
 import com.ospdf.reader.data.pdf.TextLine
+import com.ospdf.reader.domain.model.InkStroke
 import kotlin.math.abs
-
-// ==================== Data Classes ====================
-
-/**
- * Represents a complete stroke with all its properties.
- */
-data class InkStroke(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val points: List<StrokePoint>,
-    val color: Color,
-    val strokeWidth: Float,
-    val isHighlighter: Boolean = false,
-    val pageNumber: Int = 0
-) {
-    /**
-     * Generates an Android Path for efficient rendering with smooth curves.
-     */
-    fun toPath(): Path {
-        val path = Path()
-        if (points.isEmpty()) return path
-        
-        path.moveTo(points.first().x, points.first().y)
-        
-        if (points.size == 1) {
-            path.addCircle(points.first().x, points.first().y, strokeWidth / 2, Path.Direction.CW)
-        } else if (points.size == 2) {
-            path.lineTo(points[1].x, points[1].y)
-        } else {
-            // Use quadratic bezier for smooth curves
-            for (i in 1 until points.size - 1) {
-                val p1 = points[i]
-                val p2 = points[i + 1]
-                val midX = (p1.x + p2.x) / 2
-                val midY = (p1.y + p2.y) / 2
-                path.quadTo(p1.x, p1.y, midX, midY)
-            }
-            path.lineTo(points.last().x, points.last().y)
-        }
-        
-        return path
-    }
-}
 
 /**
  * Result of snapping a highlighter stroke to a text line.
@@ -150,44 +112,15 @@ private fun snapHighlighterToTextLine(
 }
 
 /**
- * Creates a StrokePoint from a MotionEvent at the current position.
+ * Creates a StrokePoint from a PointerInputChange.
  */
-private fun createStrokePoint(event: MotionEvent): StrokePoint {
+private fun createStrokePoint(change: PointerInputChange): StrokePoint {
     return StrokePoint(
-        x = event.x,
-        y = event.y,
-        pressure = 1f,
-        timestamp = System.currentTimeMillis()
+        x = change.position.x,
+        y = change.position.y,
+        pressure = change.pressure,
+        timestamp = change.uptimeMillis
     )
-}
-
-/**
- * Creates a StrokePoint from historical event data.
- */
-private fun createHistoricalPoint(event: MotionEvent, historyIndex: Int): StrokePoint {
-    return StrokePoint(
-        x = event.getHistoricalX(historyIndex),
-        y = event.getHistoricalY(historyIndex),
-        pressure = 1f,
-        timestamp = event.getHistoricalEventTime(historyIndex)
-    )
-}
-
-/**
- * Extracts all points from a move event, including historical points for smooth curves.
- */
-private fun extractMovePoints(event: MotionEvent): List<StrokePoint> {
-    val points = mutableListOf<StrokePoint>()
-    
-    // Add historical points for smoother curves
-    for (i in 0 until event.historySize) {
-        points.add(createHistoricalPoint(event, i))
-    }
-    
-    // Add current point
-    points.add(createStrokePoint(event))
-    
-    return points
 }
 
 /**
@@ -217,12 +150,11 @@ private fun createFinalStroke(
 }
 
 /**
- * High-performance inking canvas optimized for stylus input.
+ * High-performance inking canvas optimized for stylus input using Compose gestures.
  * 
  * Key features:
- * - Stylus-only annotation (finger passes through for page navigation)
- * - Smooth curve rendering with quadratic beziers
- * - Uses requestDisallowInterceptTouchEvent to prevent pager from stealing stylus events
+ * - Stylus/Eraser-only annotation (finger passes through for page navigation)
+ * - Pure Compose input handling for better gesture arbitration
  */
 @Composable
 fun InkingCanvas(
@@ -240,9 +172,8 @@ fun InkingCanvas(
     // Current stroke being drawn
     var currentPoints by remember { mutableStateOf<List<StrokePoint>>(emptyList()) }
     var isDrawing by remember { mutableStateOf(false) }
-    var lastTapTime by remember { mutableStateOf(0L) }
     
-    // Use rememberUpdatedState to capture latest values for the AndroidView callbacks
+    // Use rememberUpdatedState to capture latest values for the gesture callbacks
     val currentToolState by rememberUpdatedState(toolState)
     val currentStrokes by rememberUpdatedState(strokes)
     val currentTextLines by rememberUpdatedState(textLines)
@@ -253,7 +184,102 @@ fun InkingCanvas(
     val currentOnTap by rememberUpdatedState(onTap)
     val currentOnStylusActiveChange by rememberUpdatedState(onStylusActiveChange)
     
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    
+                    val isStylusOrEraser = down.type == PointerType.Stylus || down.type == PointerType.Eraser
+                    
+                    if (isStylusOrEraser) {
+                        // Consume the down event to claim the gesture and prevent Pager from intercepting
+                        down.consume()
+                        
+                        // Start Gesture
+                        isDrawing = true
+                        currentOnStylusActiveChange(true)
+                        currentOnStrokeStart()
+                        
+                        val startPoint = createStrokePoint(down)
+                        currentPoints = listOf(startPoint)
+                        
+                        // Initial eraser check
+                        if (currentToolState.currentTool == AnnotationTool.ERASER) {
+                            checkEraserHit(
+                                down.position.x, 
+                                down.position.y, 
+                                currentStrokes, 
+                                currentOnStrokeErase,
+                                currentToolState.eraserWidth
+                            )
+                        }
+                        
+                        var pointerId = down.id
+                        
+                        // Drag Loop
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == pointerId }
+                            
+                            // If pointer lifted or canceled
+                            if (change == null || !change.pressed) {
+                                break
+                            }
+                            
+                            if (change.position != change.previousPosition) {
+                                change.consume()
+                                val newPoint = createStrokePoint(change)
+                                currentPoints = currentPoints + newPoint
+                                
+                                // Eraser check during move
+                                if (currentToolState.currentTool == AnnotationTool.ERASER) {
+                                    checkEraserHit(
+                                        newPoint.x, 
+                                        newPoint.y, 
+                                        currentStrokes, 
+                                        currentOnStrokeErase,
+                                        currentToolState.eraserWidth
+                                    )
+                                }
+                            }
+                        }
+                        
+                        // End Gesture
+                        currentOnStylusActiveChange(false)
+                        
+                        if (currentPoints.isNotEmpty()) {
+                            val tool = currentToolState.currentTool
+                            if (tool.isDrawingTool()) {
+                                val stroke = createFinalStroke(
+                                    points = currentPoints,
+                                    tool = tool,
+                                    toolState = currentToolState,
+                                    textLines = currentTextLines
+                                )
+                                currentOnStrokeEnd(stroke)
+                            }
+                        }
+                        
+                        currentPoints = emptyList()
+                        isDrawing = false
+                        
+                    } else {
+                        // Finger Input: Do NOT consume. 
+                        // Let it pass through to parent Pager for navigation.
+                        // We can check for Tap here if needed, but Pager usually handles taps too.
+                        // For simple tap detection (toggle UI), we can add a detector if Pager doesn't consume it.
+                    }
+                }
+            }
+            .pointerInput(Unit) {
+                 // Separate tap detector that works nicely with Pager
+                 detectTapGestures(onTap = { currentOnTap() })
+            }
+    ) {
         // Drawing canvas
         Canvas(modifier = Modifier.fillMaxSize()) {
             // Draw committed strokes
@@ -272,31 +298,6 @@ fun InkingCanvas(
                 drawStroke(previewStroke)
             }
         }
-        
-        // Invisible touch interceptor using AndroidView for proper parent touch interception control
-        AndroidView(
-            factory = { context ->
-                InkingTouchHandler(
-                    context = context,
-                    isEnabled = { currentEnabled },
-                    toolState = { currentToolState },
-                    strokes = { currentStrokes },
-                    textLines = { currentTextLines },
-                    isDrawing = { isDrawing },
-                    setDrawing = { isDrawing = it },
-                    currentPoints = { currentPoints },
-                    setCurrentPoints = { currentPoints = it },
-                    lastTapTime = { lastTapTime },
-                    setLastTapTime = { lastTapTime = it },
-                    onStrokeStart = { currentOnStrokeStart() },
-                    onStrokeEnd = { currentOnStrokeEnd(it) },
-                    onStrokeErase = { currentOnStrokeErase(it) },
-                    onTap = { currentOnTap() },
-                    onStylusActiveChange = { currentOnStylusActiveChange(it) }
-                )
-            },
-            modifier = Modifier.fillMaxSize()
-        )
     }
 }
 
@@ -324,157 +325,6 @@ private fun createPreviewStroke(
         strokeWidth = previewWidth,
         isHighlighter = isHighlighterTool
     )
-}
-
-// ==================== Touch Handler ====================
-
-/**
- * Custom View that handles touch events for inking.
- * Extracted from the inline object to reduce complexity and improve testability.
- */
-private class InkingTouchHandler(
-    context: android.content.Context,
-    private val isEnabled: () -> Boolean,
-    private val toolState: () -> ToolState,
-    private val strokes: () -> List<InkStroke>,
-    private val textLines: () -> List<TextLine>,
-    private val isDrawing: () -> Boolean,
-    private val setDrawing: (Boolean) -> Unit,
-    private val currentPoints: () -> List<StrokePoint>,
-    private val setCurrentPoints: (List<StrokePoint>) -> Unit,
-    private val lastTapTime: () -> Long,
-    private val setLastTapTime: (Long) -> Unit,
-    private val onStrokeStart: () -> Unit,
-    private val onStrokeEnd: (InkStroke) -> Unit,
-    private val onStrokeErase: (String) -> Unit,
-    private val onTap: () -> Unit,
-    private val onStylusActiveChange: (Boolean) -> Unit
-) : View(context) {
-    
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!isEnabled()) return false
-        
-        val inputType = classifyInputType(event)
-        
-        // Handle pass-through cases first
-        if (shouldPassThrough(inputType, event)) {
-            return false
-        }
-        
-        // Configure parent interception for stylus
-        configureParentInterception(event, inputType)
-        
-        // Dispatch to appropriate handler
-        return when (event.action) {
-            MotionEvent.ACTION_DOWN -> handleActionDown(event)
-            MotionEvent.ACTION_MOVE -> handleActionMove(event)
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> handleActionUp()
-            else -> false
-        }
-    }
-    
-    private fun classifyInputType(event: MotionEvent): InputType {
-        return when (event.getToolType(0)) {
-            MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_ERASER -> InputType.STYLUS
-            MotionEvent.TOOL_TYPE_FINGER -> InputType.FINGER
-            else -> InputType.OTHER
-        }
-    }
-    
-    private fun shouldPassThrough(inputType: InputType, event: MotionEvent): Boolean {
-        // In NONE mode, handle tap detection but pass through
-        if (toolState().currentTool == AnnotationTool.NONE) {
-            handleTapDetection(event)
-            return true
-        }
-        
-        // Let finger input pass through for page navigation
-        if (inputType == InputType.FINGER) {
-            return true
-        }
-        
-        // Allow multi-touch for zoom/pan
-        if (event.pointerCount > 1) {
-            parent?.requestDisallowInterceptTouchEvent(false)
-            return true
-        }
-        
-        return false
-    }
-    
-    private fun handleTapDetection(event: MotionEvent) {
-        if (event.action == MotionEvent.ACTION_UP) {
-            val now = System.currentTimeMillis()
-            if (now - lastTapTime() < 300) {
-                onTap()
-            }
-            setLastTapTime(now)
-        }
-    }
-    
-    private fun configureParentInterception(event: MotionEvent, inputType: InputType) {
-        if (inputType == InputType.STYLUS && event.action == MotionEvent.ACTION_DOWN) {
-            parent?.requestDisallowInterceptTouchEvent(true)
-        }
-    }
-    
-    private fun handleActionDown(event: MotionEvent): Boolean {
-        setDrawing(true)
-        onStylusActiveChange(true)
-        onStrokeStart()
-        
-        val point = createStrokePoint(event)
-        setCurrentPoints(listOf(point))
-        
-        // For eraser, check if we hit any stroke
-        if (toolState().currentTool == AnnotationTool.ERASER) {
-            checkEraserHit(event.x, event.y, strokes(), onStrokeErase)
-        }
-        
-        return true
-    }
-    
-    private fun handleActionMove(event: MotionEvent): Boolean {
-        if (!isDrawing()) return true
-        
-        val newPoints = extractMovePoints(event)
-        setCurrentPoints(currentPoints() + newPoints)
-        
-        // For eraser, continuously check hits
-        if (toolState().currentTool == AnnotationTool.ERASER) {
-            newPoints.forEach { point ->
-                checkEraserHit(point.x, point.y, strokes(), onStrokeErase)
-            }
-        }
-        
-        return true
-    }
-    
-    private fun handleActionUp(): Boolean {
-        parent?.requestDisallowInterceptTouchEvent(false)
-        onStylusActiveChange(false)
-        
-        if (isDrawing() && currentPoints().isNotEmpty()) {
-            val tool = toolState().currentTool
-            if (tool.isDrawingTool()) {
-                val stroke = createFinalStroke(
-                    points = currentPoints(),
-                    tool = tool,
-                    toolState = toolState(),
-                    textLines = textLines()
-                )
-                onStrokeEnd(stroke)
-            }
-        }
-        
-        setCurrentPoints(emptyList())
-        setDrawing(false)
-        return true
-    }
-    
-    private enum class InputType {
-        STYLUS, FINGER, OTHER
-    }
 }
 
 // ==================== Drawing Functions ====================
@@ -530,25 +380,77 @@ private fun DrawScope.drawStroke(stroke: InkStroke) {
 }
 
 /**
- * Checks if the eraser position hits any stroke.
+ * Checks if the eraser position hits any stroke using robust segment intersection.
  */
 private fun checkEraserHit(
     x: Float,
     y: Float,
     strokes: List<InkStroke>,
-    onStrokeErase: (String) -> Unit
+    onStrokeErase: (String) -> Unit,
+    eraserRadius: Float
 ) {
-    val hitRadius = 20f
+    val hitPoint = Offset(x, y)
     
     for (stroke in strokes) {
-        for (point in stroke.points) {
+        var isHit = false
+        val points = stroke.points
+        
+        // 1. Check if any point is within radius (fast check)
+        for (point in points) {
             val dx = abs(point.x - x)
             val dy = abs(point.y - y)
-            
-            if (dx < hitRadius && dy < hitRadius) {
-                onStrokeErase(stroke.id)
+            if (dx < eraserRadius && dy < eraserRadius) {
+                isHit = true
                 break
             }
         }
+        
+        // 2. If no point hit, check segments (robust check)
+        if (!isHit && points.size > 1) {
+             for (i in 0 until points.size - 1) {
+                 val p1 = Offset(points[i].x, points[i].y)
+                 val p2 = Offset(points[i+1].x, points[i+1].y)
+                 
+                 val dist = distanceToLineSegment(hitPoint, p1, p2)
+                 if (dist < eraserRadius + stroke.strokeWidth / 2) {
+                     isHit = true
+                     break
+                 }
+             }
+        }
+        
+        if (isHit) {
+            onStrokeErase(stroke.id)
+            // Continue checking other strokes? Usually ink apps erase all hit strokes.
+            // But if we modify the list while iterating, we might crash if 'strokes' was mutable.
+            // Here 'strokes' is a List (immutable usually), onStrokeErase is a callback.
+            // Returning after first hit makes it "single stroke eraser per frame", 
+            // which is safer performance-wise for real-time.
+            // However, erasing multiple overlapping strokes is better UX.
+            // But since this is called frequently on Move, "one per frame" is fine.
+            return 
+        }
     }
 }
+
+/**
+ * Calculates the minimum distance from a point to a line segment.
+ */
+private fun distanceToLineSegment(point: Offset, lineStart: Offset, lineEnd: Offset): Float {
+    val lineLength = (lineEnd - lineStart).getDistance()
+    if (lineLength < 0.001f) {
+        // Line is essentially a point
+        return (point - lineStart).getDistance()
+    }
+    
+    // Calculate the projection of point onto the line
+    val t = ((point - lineStart).dotProduct(lineEnd - lineStart) / (lineLength * lineLength)).coerceIn(0f, 1f)
+    val projection = lineStart + (lineEnd - lineStart) * t
+    
+    return (point - projection).getDistance()
+}
+
+/**
+ * Dot product of two 2D vectors represented as Offsets.
+ */
+private fun Offset.dotProduct(other: Offset): Float = this.x * other.x + this.y * other.y

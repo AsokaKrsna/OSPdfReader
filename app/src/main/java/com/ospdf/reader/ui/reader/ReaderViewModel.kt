@@ -18,7 +18,7 @@ import com.ospdf.reader.domain.model.ToolState
 import com.ospdf.reader.domain.usecase.AddStrokeAction
 import com.ospdf.reader.domain.usecase.RemoveStrokeAction
 import com.ospdf.reader.domain.usecase.UndoRedoManager
-import com.ospdf.reader.ui.components.InkStroke
+import com.ospdf.reader.domain.model.InkStroke
 import com.ospdf.reader.ui.tools.ShapeAnnotation
 import com.ospdf.reader.ui.tools.TextAnnotation
 import com.ospdf.reader.ui.tools.LassoSelection
@@ -66,7 +66,9 @@ data class ReaderUiState(
     // User preferences that affect the reader
     val keepScreenOn: Boolean = true,
     val reducedMotion: Boolean = false,
-    val autoSaveAnnotations: Boolean = true
+    val autoSaveAnnotations: Boolean = true,
+    // Quick access to recently used tools
+    val recentTools: List<AnnotationTool> = listOf(AnnotationTool.PEN, AnnotationTool.HIGHLIGHTER, AnnotationTool.ERASER)
 )
 
 /**
@@ -384,9 +386,20 @@ class ReaderViewModel @Inject constructor(
      */
     fun setTool(tool: AnnotationTool) {
         _uiState.update { state ->
+            // Update recent tools list (excluding NONE)
+            val updatedRecentTools = if (tool != AnnotationTool.NONE) {
+                val recent = state.recentTools.toMutableList()
+                recent.remove(tool) // Remove if already exists
+                recent.add(0, tool) // Add to front
+                recent.take(3) // Keep only last 3
+            } else {
+                state.recentTools
+            }
+            
             state.copy(
                 toolState = state.toolState.copy(currentTool = tool),
-                showAnnotationToolbar = tool != AnnotationTool.NONE
+                showAnnotationToolbar = tool != AnnotationTool.NONE,
+                recentTools = updatedRecentTools
             )
         }
     }
@@ -664,6 +677,24 @@ class ReaderViewModel @Inject constructor(
         // Update the flow
         updatePageStrokes(pageIndex)
         updateUndoRedoState()
+        
+        _uiState.update { it.copy(hasUnsavedChanges = true) }
+        
+        // Persist to database
+        saveAnnotationsToDatabase()
+    }
+    
+    /**
+     * Removes a shape (eraser action).
+     */
+    fun removeShape(shapeId: String) {
+        val pageIndex = _uiState.value.currentPage
+        val shapes = _pageShapes[pageIndex] ?: return
+        
+        shapes.removeAll { it.id == shapeId }
+        
+        // Update the flow
+        updatePageShapes(pageIndex)
         
         _uiState.update { it.copy(hasUnsavedChanges = true) }
         
