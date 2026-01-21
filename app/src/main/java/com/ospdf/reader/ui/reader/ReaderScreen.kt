@@ -318,7 +318,7 @@ fun ReaderScreen(
                     if (uiState.showAnnotationToolbar) {
                         FloatingAnnotationToolbar(
                             toolState = uiState.toolState,
-                            recentTools = uiState.recentTools,
+
                             canUndo = uiState.canUndo,
                             canRedo = uiState.canRedo,
                             isZoomed = isZoomed,
