@@ -295,18 +295,16 @@ class AnnotationManager @Inject constructor(
                 
                 // FLIP Y-COORDINATE: PDF origin is Bottom-Left, App is Top-Left
                 // Using bounds.y1 - y to flip.
-                // DRIFT CORRECTION: Adjusted to +8f per user feedback.
-                val driftCorrection = 8f
                 
                 val points = stroke.points
                 val startX = points[0].x + bounds.x0
-                val startY = bounds.y1 - points[0].y + driftCorrection
+                val startY = bounds.y1 - points[0].y
                 
                 contentBuffer.append("${fmt(startX)} ${fmt(startY)} m ")
                 
                 for (i in 1 until points.size) {
                     val px = points[i].x + bounds.x0
-                    val py = bounds.y1 - points[i].y + driftCorrection
+                    val py = bounds.y1 - points[i].y
                     contentBuffer.append("${fmt(px)} ${fmt(py)} l ")
                 }
                 
@@ -329,16 +327,15 @@ class AnnotationManager @Inject constructor(
                 
                 val shapePoints = getPointsForShape(shape)
                 if (shapePoints.isNotEmpty()) {
-                val driftCorrection = 8f
-                val start = shapePoints[0]
+                    val start = shapePoints[0]
                     val sX = start.x + bounds.x0
-                    val sY = bounds.y1 - start.y + driftCorrection
+                    val sY = bounds.y1 - start.y
                     contentBuffer.append("${fmt(sX)} ${fmt(sY)} m ")
                     
                     for (i in 1 until shapePoints.size) {
                         val p = shapePoints[i]
                         val pX = p.x + bounds.x0
-                        val pY = bounds.y1 - p.y + driftCorrection
+                        val pY = bounds.y1 - p.y
                         contentBuffer.append("${fmt(pX)} ${fmt(pY)} l ")
                     }
                     
