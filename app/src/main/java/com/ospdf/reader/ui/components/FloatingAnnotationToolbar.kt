@@ -74,9 +74,9 @@ fun FloatingAnnotationToolbar(
     val fabSizeDp = 56.dp // standard compact FAB
     val fabSizePx = with(density) { fabSizeDp.toPx() }
     
-    // Position state - start at bottom right with nice margin
+    // Position state - start at mid-right side of screen
     var offsetX by remember { mutableFloatStateOf(screenWidthPx - fabSizePx - 48f) }
-    var offsetY by remember { mutableFloatStateOf(screenHeightPx - fabSizePx - 250f) }
+    var offsetY by remember { mutableFloatStateOf(screenHeightPx / 2 - fabSizePx / 2) }
     
     // Expansion state
     var isExpanded by remember { mutableStateOf(false) }

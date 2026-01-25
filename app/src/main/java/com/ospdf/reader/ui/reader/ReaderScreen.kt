@@ -4,10 +4,16 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.view.WindowManager
 import androidx.compose.animation.*
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.VerticalPager
@@ -45,6 +51,9 @@ import com.ospdf.reader.ui.components.SearchBar
 import com.ospdf.reader.ui.tools.LassoSelectionCanvas
 import com.ospdf.reader.ui.tools.ShapeCanvas
 import com.ospdf.reader.data.pdf.SearchResult
+import com.ospdf.reader.ui.bookmarks.BookmarkPanel
+import com.ospdf.reader.ui.bookmarks.BookmarkDialog
+import com.ospdf.reader.data.local.BookmarkEntity
 import kotlinx.coroutines.launch
 import com.ospdf.reader.ui.components.ErrorMessage
 
@@ -63,6 +72,12 @@ fun ReaderScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    
+    val bookmarks by viewModel.bookmarks.collectAsState()
+    
+    // Bookmark dialog state
+    var showBookmarkDialog by remember { mutableStateOf(false) }
+    var bookmarkToEdit by remember { mutableStateOf<BookmarkEntity?>(null) }
     
     // Apply keep screen on setting
     DisposableEffect(uiState.keepScreenOn) {
@@ -94,8 +109,12 @@ fun ReaderScreen(
     }
 
     // Handle back press with auto-save
-    BackHandler(enabled = uiState.hasUnsavedChanges) {
-        viewModel.saveAndExit()
+    BackHandler(enabled = uiState.hasUnsavedChanges || uiState.showBookmarks) {
+        if (uiState.showBookmarks) {
+            viewModel.toggleBookmarks()
+        } else {
+            viewModel.saveAndExit()
+        }
     }
     
     // Auto-exit after successful save
@@ -336,6 +355,76 @@ fun ReaderScreen(
                         )
                     }
                     
+                    // Waterdrop zoom notch on right edge
+                    WaterdropZoomNotch(
+                        zoomLevel = zoomLevel,
+                        onZoomIn = {
+                            zoomLevel = 1.5f
+                        },
+                        onZoomOut = {
+                            zoomLevel = 1f
+                            panOffset = Offset.Zero
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(bottom = 80.dp) // Approx 1/10th up from bottom (considering nav bars)
+                    )
+                    
+                    // Bookmark Panel
+                    AnimatedVisibility(
+                        visible = uiState.showBookmarks,
+                        enter = slideInVertically { it } + fadeIn(),
+                        exit = slideOutVertically { it } + fadeOut(),
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    ) {
+                        BookmarkPanel(
+                            bookmarks = bookmarks,
+                            currentPage = uiState.currentPage,
+                            onBookmarkClick = { bookmark ->
+                                scope.launch {
+                                    pagerState.animateScrollToPage(bookmark.pageNumber)
+                                }
+                                viewModel.toggleBookmarks()
+                            },
+                            onAddBookmark = {
+                                bookmarkToEdit = null
+                                showBookmarkDialog = true
+                            },
+                            onEditBookmark = { bookmark ->
+                                bookmarkToEdit = bookmark
+                                showBookmarkDialog = true
+                            },
+                            onDeleteBookmark = { bookmark ->
+                                viewModel.deleteBookmark(bookmark)
+                            },
+                            onClose = { viewModel.toggleBookmarks() }
+                        )
+                    }
+                    
+                    // Bookmark Dialog
+                    if (showBookmarkDialog) {
+                        BookmarkDialog(
+                            initialTitle = bookmarkToEdit?.title ?: "",
+                            initialNote = bookmarkToEdit?.note ?: "",
+                            initialColor = bookmarkToEdit?.color ?: 0xFFFF5722.toInt(),
+                            pageNumber = uiState.currentPage,
+                            onConfirm = { title, note, color ->
+                                if (bookmarkToEdit != null) {
+                                    viewModel.updateBookmark(bookmarkToEdit!!.copy(title = title, note = note, color = color))
+                                } else {
+                                    viewModel.addBookmark(title, note, color)
+                                }
+                                showBookmarkDialog = false
+                                bookmarkToEdit = null
+                            },
+                            onDismiss = {
+                                showBookmarkDialog = false
+                                bookmarkToEdit = null
+                            }
+                        )
+                    }
+                    
+                    // Saving indicator
                     // Saving indicator
                     if (uiState.isSaving) {
                         Box(
@@ -367,6 +456,7 @@ fun ReaderScreen(
 /**
  * PDF page view with integrated inking canvas for annotations.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PdfPageWithAnnotations(
     pageIndex: Int,
@@ -497,6 +587,18 @@ private fun PdfPageWithAnnotations(
                 translationX = panOffset.x
                 translationY = panOffset.y
             }
+            // Tap to toggle controls (navigation mode only when not zoomed)
+            .then(
+                if (effectiveTool == AnnotationTool.NONE && !isZoomed) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { onTap() }
+                        )
+                    }
+                } else {
+                    Modifier
+                }
+            )
             // When zoomed: full pan+zoom. When not zoomed: pinch-only (multi-touch)
             .then(
                 if (isZoomed) {
@@ -529,23 +631,6 @@ private fun PdfPageWithAnnotations(
                             } while (event.changes.any { it.pressed })
                         }
                     }
-                }
-            )
-            .then(
-                // Tap gestures when not in annotation mode and not zoomed
-                if (effectiveTool == AnnotationTool.NONE && !isZoomed) {
-                    Modifier.pointerInput(Unit) {
-                        detectTapGestures(
-                            onDoubleTap = { offset ->
-                                // Double-tap to zoom
-                                val newZoom = if (zoomLevel > 1.05f) 1f else 2.5f
-                                onZoomChange(newZoom, Offset.Zero)
-                            },
-                            onTap = { onTap() }
-                        )
-                    }
-                } else {
-                    Modifier
                 }
             ),
         contentAlignment = Alignment.Center
@@ -676,7 +761,7 @@ private fun PdfPageWithAnnotations(
                             viewModel.addStroke(mapped)
                         },
                         onStrokeErase = { strokeId -> viewModel.removeStroke(strokeId) },
-                        onTap = onTap,
+                        // Removed onTap - no tap-to-fullscreen in annotation mode
                         onStylusActiveChange = onStylusActiveChange
                     )
                     
@@ -1277,3 +1362,124 @@ private fun ExpandedBottomBar(
     }
 }
 
+/**
+ * Waterdrop-style zoom notch on the right edge of the screen.
+ * Shows a subtle teardrop indicator that expands on click.
+ */
+@Composable
+private fun WaterdropZoomNotch(
+    zoomLevel: Float,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    val isZoomed = zoomLevel > 1.05f
+    
+    // Animation for expansion
+    val expandAnimation by animateFloatAsState(
+        targetValue = if (isExpanded) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = 300f),
+        label = "expandNotch"
+    )
+    
+    Box(
+        modifier = modifier
+            .offset(x = (8 * (1f - expandAnimation)).dp) // Slide in from right
+            .clip(RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp))
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
+            )
+            .clickable { 
+                if (isExpanded) {
+                    // If expanded, clicking is for zoom action
+                } else {
+                    isExpanded = true 
+                }
+            }
+            .padding(
+                start = 8.dp,
+                end = 4.dp,
+                top = 8.dp,
+                bottom = 8.dp
+            ),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            // When collapsed: just show a teardrop indicator
+            // When expanded: show zoom controls
+            if (isExpanded) {
+                // Zoom out button
+                IconButton(
+                    onClick = {
+                        onZoomOut()
+                        isExpanded = false
+                    },
+                    modifier = Modifier.size(36.dp),
+                    enabled = isZoomed
+                ) {
+                    Icon(
+                        Icons.Outlined.ZoomOut,
+                        contentDescription = "Zoom out",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (isZoomed) 
+                            MaterialTheme.colorScheme.onSurfaceVariant 
+                        else 
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    )
+                }
+                
+                // Zoom level indicator
+                Text(
+                    text = "${(zoomLevel * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                // Zoom in button
+                IconButton(
+                    onClick = {
+                        onZoomIn()
+                        isExpanded = false
+                    },
+                    modifier = Modifier.size(36.dp),
+                    enabled = !isZoomed
+                ) {
+                    Icon(
+                        Icons.Outlined.ZoomIn,
+                        contentDescription = "Zoom in",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (!isZoomed) 
+                            MaterialTheme.colorScheme.onSurfaceVariant 
+                        else 
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    )
+                }
+                
+                // Close button
+                IconButton(
+                    onClick = { isExpanded = false },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.ChevronRight,
+                        contentDescription = "Collapse",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            } else {
+                // Collapsed: teardrop indicator
+                Icon(
+                    if (isZoomed) Icons.Outlined.ZoomOut else Icons.Outlined.ZoomIn,
+                    contentDescription = "Zoom",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
+        }
+    }
+}

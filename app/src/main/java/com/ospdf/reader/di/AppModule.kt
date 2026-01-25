@@ -84,9 +84,10 @@ object AppModule {
     @Singleton
     fun provideAnnotationRepository(
         inkAnnotationDao: InkAnnotationDao,
-        shapeAnnotationDao: ShapeAnnotationDao
+        shapeAnnotationDao: ShapeAnnotationDao,
+        bookmarkDao: BookmarkDao
     ): AnnotationRepository {
-        return AnnotationRepository(inkAnnotationDao, shapeAnnotationDao)
+        return AnnotationRepository(inkAnnotationDao, shapeAnnotationDao, bookmarkDao)
     }
 
     @Provides

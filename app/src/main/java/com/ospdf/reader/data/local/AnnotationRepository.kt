@@ -7,6 +7,7 @@ import com.ospdf.reader.domain.model.InkStroke
 import com.ospdf.reader.ui.tools.ShapeAnnotation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
 import org.json.JSONObject
 import javax.inject.Inject
@@ -19,8 +20,30 @@ import javax.inject.Singleton
 @Singleton
 class AnnotationRepository @Inject constructor(
     private val inkAnnotationDao: InkAnnotationDao,
-    private val shapeAnnotationDao: ShapeAnnotationDao
+    private val shapeAnnotationDao: ShapeAnnotationDao,
+    private val bookmarkDao: BookmarkDao
 ) {
+    /**
+     * Load all bookmarks for a document.
+     */
+    fun getBookmarks(documentPath: String): Flow<List<com.ospdf.reader.data.local.BookmarkEntity>> {
+        return bookmarkDao.getBookmarksForDocument(documentPath)
+    }
+
+    /**
+     * Save a bookmark.
+     */
+    suspend fun saveBookmark(bookmark: com.ospdf.reader.data.local.BookmarkEntity) = withContext(Dispatchers.IO) {
+        bookmarkDao.insertBookmark(bookmark)
+    }
+
+    /**
+     * Delete a bookmark.
+     */
+    suspend fun deleteBookmark(bookmark: com.ospdf.reader.data.local.BookmarkEntity) = withContext(Dispatchers.IO) {
+        bookmarkDao.deleteBookmark(bookmark)
+    }
+
     /**
      * Load all ink strokes for a document.
      */
@@ -111,6 +134,16 @@ class AnnotationRepository @Inject constructor(
      */
     suspend fun deleteShape(shapeId: String) = withContext(Dispatchers.IO) {
         shapeAnnotationDao.deleteAnnotationById(shapeId)
+    }
+    
+    /**
+     * Delete all annotations (ink strokes and shapes) for a document.
+     * Call this after annotations have been successfully saved to the PDF
+     * to prevent duplicate rendering.
+     */
+    suspend fun deleteAllForDocument(documentPath: String) = withContext(Dispatchers.IO) {
+        inkAnnotationDao.deleteAllForDocument(documentPath)
+        shapeAnnotationDao.deleteAllForDocument(documentPath)
     }
     
     // ========== Conversion Functions ==========

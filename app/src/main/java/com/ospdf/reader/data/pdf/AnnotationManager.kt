@@ -111,6 +111,13 @@ class AnnotationManager @Inject constructor(
                     
                     android.util.Log.d("AnnotationManager", "Processing page $pageNumber: ${pageStrokes.size} strokes, ${pageShapes.size} shapes")
                     
+                    // Debug: Log stroke IDs to detect duplicates
+                    val strokeIds = pageStrokes.map { it.id }
+                    val duplicateIds = strokeIds.groupBy { it }.filter { it.value.size > 1 }.keys
+                    if (duplicateIds.isNotEmpty()) {
+                        android.util.Log.e("AnnotationManager", "WARNING: Duplicate stroke IDs detected: $duplicateIds")
+                    }
+                    
                     val page = document.loadPage(pageNumber) as PDFPage
                     val pdfDocument = document as PDFDocument
 
@@ -138,11 +145,12 @@ class AnnotationManager @Inject constructor(
                 
                 val pdfDocument = document as PDFDocument
                 
-                // Note: When bakeAnnotations=true, we've already written directly to content stream
-                // bakeAnnotationsIntoPages is only useful for flattening pre-existing annotations
+                // OPTION A FIX: Only call bakeAnnotationsIntoPages when explicitly baking
+                // This avoids slow iteration through ALL pages during auto-save
+                // OPTION B FIX: Pass the set of annotated pages to only process those
                 if (bakeAnnotations) {
-                    android.util.Log.d("AnnotationManager", "Annotations already baked to content stream, skipping annotation flattening")
-                    bakeAnnotationsIntoPages(pdfDocument)
+                    android.util.Log.d("AnnotationManager", "Baking annotations: processing only ${annotatedPages.size} annotated pages")
+                    bakeAnnotationsIntoPages(pdfDocument, annotatedPages.toSet())
                 }
                 
                 // Save to temp file - use standard save without special options
@@ -599,14 +607,16 @@ class AnnotationManager @Inject constructor(
             dict.put("CA", document.newReal(alpha))
             dict.put("ca", document.newReal(alpha))
             
-            // Use Multiply blending for highlighter effect
-            dict.put("BM", document.newName("Multiply"))
+            // FIX: Don't set blend mode for PDF save - MuPDF has rendering issues with 
+            // Darken/Multiply blend modes. Just use alpha transparency for cross-viewer compatibility.
+            // The in-app rendering can use blend modes, but saved PDF should use simple alpha.
+            // dict.put("BM", document.newName("Darken"))
         }
         
         // Add/replace in resources
         extGState!!.put(key, dict)
         
-        android.util.Log.d("AnnotationManager", "Set ExtGState: $key (CA=$alpha, BM=Multiply)")
+        android.util.Log.d("AnnotationManager", "Set ExtGState: $key (CA=$alpha, no blend mode)")
         
         return key
     }
@@ -936,11 +946,13 @@ class AnnotationManager @Inject constructor(
      * This converts annotation appearances into static XObjects drawn on the page,
      * then removes the annotations. Works like Chrome/Xodo flattening.
      */
-    private fun bakeAnnotationsIntoPages(document: PDFDocument) {
+    private fun bakeAnnotationsIntoPages(document: PDFDocument, annotatedPages: Set<Int>? = null) {
         val pageCount = document.countPages()
-        android.util.Log.d("AnnotationManager", "bakeAnnotationsIntoPages: processing $pageCount pages")
+        // OPTION B FIX: Only process specified pages, or all if not specified
+        val pagesToProcess = annotatedPages ?: (0 until pageCount).toSet()
+        android.util.Log.d("AnnotationManager", "bakeAnnotationsIntoPages: processing ${pagesToProcess.size} of $pageCount pages")
         
-        for (pageIndex in 0 until pageCount) {
+        for (pageIndex in pagesToProcess) {
             try {
                 val page = document.loadPage(pageIndex) as PDFPage
                 val pageObj = page.getObject()
@@ -986,6 +998,12 @@ class AnnotationManager @Inject constructor(
                         val ap = annot.get("AP")?.resolve()
                         if (ap == null) {
                             android.util.Log.d("AnnotationManager", "Page $pageIndex, Annot $i: NO AP dictionary!")
+                            // FIX: Still mark Ink annotations for removal - they were added by us
+                            // but without proper AP, so delete to prevent double rendering
+                            if (subtype == "Ink" || subtype == "Highlight") {
+                                android.util.Log.d("AnnotationManager", "Page $pageIndex, Annot $i: Marking for removal (no AP)")
+                                annotsToRemove.add(i)
+                            }
                             continue
                         }
                         var appearance = ap.get("N")?.resolve()
@@ -1000,6 +1018,11 @@ class AnnotationManager @Inject constructor(
                         
                         if (appearance == null || !appearance.isStream) {
                             android.util.Log.d("AnnotationManager", "Page $pageIndex, Annot $i: AP/N is not a stream")
+                            // FIX: Still mark Ink/Highlight annotations for removal
+                            if (subtype == "Ink" || subtype == "Highlight") {
+                                android.util.Log.d("AnnotationManager", "Page $pageIndex, Annot $i: Marking for removal (invalid AP)")
+                                annotsToRemove.add(i)
+                            }
                             continue
                         }
                         
@@ -1066,10 +1089,31 @@ class AnnotationManager @Inject constructor(
                         val rectWidth = x1 - x0
                         val rectHeight = y1 - y0
                         
-                        if (bboxWidth == 0f || bboxHeight == 0f) continue
+                        // OPTION C FIX: Defensive checks for invalid dimensions
+                        // Use a small epsilon to catch near-zero cases that could cause huge scales
+                        val epsilon = 0.001f
+                        if (kotlin.math.abs(bboxWidth) < epsilon || kotlin.math.abs(bboxHeight) < epsilon) {
+                            android.util.Log.w("AnnotationManager", "Page $pageIndex, Annot $i: Skipping due to near-zero bbox (${bboxWidth}x${bboxHeight})")
+                            continue
+                        }
+                        if (kotlin.math.abs(rectWidth) < epsilon || kotlin.math.abs(rectHeight) < epsilon) {
+                            android.util.Log.w("AnnotationManager", "Page $pageIndex, Annot $i: Skipping due to near-zero rect (${rectWidth}x${rectHeight})")
+                            continue
+                        }
                         
                         val scaleX = rectWidth / bboxWidth
                         val scaleY = rectHeight / bboxHeight
+                        
+                        // OPTION C FIX: Check for unreasonable scale values that could cause rendering issues
+                        if (scaleX.isNaN() || scaleY.isNaN() || scaleX.isInfinite() || scaleY.isInfinite()) {
+                            android.util.Log.w("AnnotationManager", "Page $pageIndex, Annot $i: Skipping due to invalid scale (${scaleX}, ${scaleY})")
+                            continue
+                        }
+                        if (kotlin.math.abs(scaleX) > 1000f || kotlin.math.abs(scaleY) > 1000f) {
+                            android.util.Log.w("AnnotationManager", "Page $pageIndex, Annot $i: Skipping due to extreme scale (${scaleX}, ${scaleY})")
+                            continue
+                        }
+                        
                         val translateX = x0 - tbx0 * scaleX
                         val translateY = y0 - tby0 * scaleY
                         

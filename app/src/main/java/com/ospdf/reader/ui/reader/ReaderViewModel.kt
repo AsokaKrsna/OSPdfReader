@@ -137,6 +137,56 @@ class ReaderViewModel @Inject constructor(
     // Text lines cache for smart highlighter
     private val textLinesCache = mutableMapOf<Int, List<com.ospdf.reader.data.pdf.TextLine>>()
     
+    // Bookmarks flow
+    private val _bookmarks = MutableStateFlow<List<com.ospdf.reader.data.local.BookmarkEntity>>(emptyList())
+    val bookmarks: StateFlow<List<com.ospdf.reader.data.local.BookmarkEntity>> = _bookmarks.asStateFlow()
+    
+    // Current document path for bookmarks
+    private var bookmarksJob: kotlinx.coroutines.Job? = null
+    
+    private fun loadBookmarks(documentPath: String) {
+        bookmarksJob?.cancel()
+        bookmarksJob = viewModelScope.launch {
+            annotationRepository.getBookmarks(documentPath).collect { bookmarkList ->
+                _bookmarks.value = bookmarkList
+            }
+        }
+    }
+    
+    fun toggleBookmarks() {
+        _uiState.update { it.copy(showBookmarks = !it.showBookmarks, showSearch = false, showAnnotationToolbar = false) }
+    }
+    
+    fun addBookmark(title: String, note: String, color: Int) {
+        val path = currentDocumentPath.ifEmpty { return }
+        val page = _uiState.value.currentPage
+        
+        viewModelScope.launch {
+            val bookmark = com.ospdf.reader.data.local.BookmarkEntity(
+                documentPath = path,
+                pageNumber = page,
+                title = title,
+                note = note,
+                color = color
+            )
+            annotationRepository.saveBookmark(bookmark)
+            _uiState.update { it.copy(successMessage = "Bookmark added") }
+        }
+    }
+    
+    fun updateBookmark(bookmark: com.ospdf.reader.data.local.BookmarkEntity) {
+        viewModelScope.launch {
+            annotationRepository.saveBookmark(bookmark)
+        }
+    }
+    
+    fun deleteBookmark(bookmark: com.ospdf.reader.data.local.BookmarkEntity) {
+        viewModelScope.launch {
+            annotationRepository.deleteBookmark(bookmark)
+            _uiState.update { it.copy(successMessage = "Bookmark removed") }
+        }
+    }
+    
     /**
      * Gets text lines for a page (for smart highlighter snapping).
      */
@@ -230,6 +280,9 @@ class ReaderViewModel @Inject constructor(
                     
                     // Load saved annotations from database
                     loadAnnotationsFromDatabase(document.path)
+                    
+                    // Load bookmarks
+                    loadBookmarks(document.path)
                 },
                 onFailure = { error ->
                     _uiState.update {
@@ -935,9 +988,7 @@ class ReaderViewModel @Inject constructor(
         }
     }
     
-    fun toggleBookmarks() {
-        _uiState.update { it.copy(showBookmarks = !it.showBookmarks) }
-    }
+
     
     fun toggleMoreMenu() {
         _uiState.update { it.copy(showMoreMenu = !it.showMoreMenu) }

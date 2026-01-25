@@ -375,7 +375,9 @@ private fun DrawScope.drawStroke(stroke: InkStroke) {
             cap = StrokeCap.Round,
             join = StrokeJoin.Round
         ),
-        blendMode = if (stroke.isHighlighter) BlendMode.Multiply else BlendMode.SrcOver
+        // FIX: Use Darken instead of Multiply for consistent transparency
+        // Multiply causes solid appearance on non-white PDF content
+        blendMode = if (stroke.isHighlighter) BlendMode.Darken else BlendMode.SrcOver
     )
 }
 
